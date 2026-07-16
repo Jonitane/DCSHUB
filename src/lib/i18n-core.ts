@@ -22,6 +22,7 @@ const ENGLISH_TEXT: Record<string, string> = {
   '开始使用': 'Get Started',
   '保存软件选择失败': 'Failed to save software selection',
   '页面未找到': 'Page not found',
+  '正在加载模块…': 'Loading modules…',
   '您访问的页面不存在或已被移除，请检查链接是否正确，或返回仪表板继续操作。': 'The page does not exist or has been removed. Check the link or return to the dashboard.',
   '返回仪表板': 'Back to Dashboard',
   '未知': 'Unknown',
