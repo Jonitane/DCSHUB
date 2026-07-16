@@ -8,6 +8,7 @@ import { useModuleContext } from '@/modules/ModuleContext'
 import { Switch } from '@/components/ui/switch'
 import type { SoftwareCatalogOverview } from '@/shared/software-catalog-contracts'
 import { APP_VERSION } from '@/shared/app-meta'
+import { useI18n } from '@/lib/i18n'
 
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Monitor, Gamepad2, Eye, Package, Rocket,
@@ -24,6 +25,7 @@ const navIconClass = (active: boolean, prominent = false) => `relative z-10 flex
 }`
 
 export default function AppSidebar() {
+  const { language, toggleLanguage } = useI18n()
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const { modules, refresh } = useModuleContext()
@@ -76,7 +78,7 @@ export default function AppSidebar() {
   return (
     <Sidebar collapsible="icon" className="z-[60] border-r border-sidebar-border" style={{ '--sidebar-width': '17rem' } as React.CSSProperties}>
       <SidebarHeader className="app-drag-region border-b border-sidebar-border">
-        <div className="flex items-center gap-2.5 px-2 py-3.5 group-data-[state=collapsed]:justify-center group-data-[state=collapsed]:px-0">
+        <div className="relative flex items-center gap-2.5 px-2 py-3.5 group-data-[state=collapsed]:justify-center group-data-[state=collapsed]:px-0">
           <div className="size-10 shrink-0 overflow-hidden rounded-lg">
             <Image src="/images/dcs-game-icon.png" alt="DCS" className="size-full object-cover" />
           </div>
@@ -87,6 +89,16 @@ export default function AppSidebar() {
               <span className="rounded border border-sidebar-border/70 bg-sidebar-accent/45 px-1.5 py-0.5 text-[9px] font-semibold tracking-normal text-sidebar-foreground/70">{APP_VERSION}</span>
             </div>
           </div>
+          <button
+            type="button"
+            className="app-no-drag flex h-7 shrink-0 items-center gap-1 overflow-hidden rounded-md border border-sidebar-border/75 bg-sidebar-accent/55 px-1.5 text-[9px] font-semibold text-sidebar-foreground/75 shadow-sm transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary group-data-[state=collapsed]:absolute group-data-[state=collapsed]:bottom-2 group-data-[state=collapsed]:right-0 group-data-[state=collapsed]:size-5 group-data-[state=collapsed]:justify-center group-data-[state=collapsed]:p-0"
+            aria-label={language === 'zh-CN' ? '切换到英文' : 'Switch to Chinese'}
+            title={language === 'zh-CN' ? 'English' : '中文'}
+            onClick={toggleLanguage}
+          >
+            <Image src={language === 'zh-CN' ? '/flags/cn.svg' : '/flags/us.svg'} alt="" className="h-3.5 w-5 rounded-[2px] object-cover group-data-[state=collapsed]:h-2.5 group-data-[state=collapsed]:w-4" />
+            <span className="group-data-[state=collapsed]:hidden">{language === 'zh-CN' ? '中' : 'EN'}</span>
+          </button>
         </div>
       </SidebarHeader>
 

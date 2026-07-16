@@ -283,7 +283,7 @@ export default function GenericModulePage({ moduleId }: { moduleId: ModuleId }) 
             </div>
           </CardHeader>
           <CardContent>
-            <div className="h-72 overflow-y-auto rounded-lg border border-border/20 bg-black/40 p-3 font-mono text-xs leading-relaxed">
+            <div data-i18n-ignore="true" className="h-72 overflow-y-auto rounded-lg border border-border/20 bg-black/40 p-3 font-mono text-xs leading-relaxed">
               {logs.length === 0 ? <p className="pt-24 text-center text-muted-foreground/50">启动后将在这里显示 EyeMouse 运行日志</p> : logs.map((entry, index) => (
                 <div key={`${entry.timestamp}-${index}`} className={`whitespace-pre-wrap break-all ${entry.level === 'error' ? 'text-red-400' : entry.level === 'warn' ? 'text-amber-400' : 'text-muted-foreground'}`}>
                   {entry.message}

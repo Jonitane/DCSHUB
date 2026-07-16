@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20" role="img" aria-label="China">
+  <rect width="30" height="20" rx="1.5" fill="#DE2910"/>
+  <path fill="#FFDE00" d="m5 3 .71 2.18H8L6.15 6.53l.7 2.18L5 7.36 3.15 8.71l.7-2.18L2 5.18h2.29L5 3Z"/>
+  <circle cx="9.2" cy="3.2" r=".75" fill="#FFDE00"/>
+  <circle cx="10.8" cy="5.2" r=".75" fill="#FFDE00"/>
+  <circle cx="10.5" cy="8" r=".75" fill="#FFDE00"/>
+  <circle cx="8.5" cy="9.8" r=".75" fill="#FFDE00"/>
+</svg>
