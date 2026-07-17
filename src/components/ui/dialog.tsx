@@ -77,7 +77,7 @@ export function DialogContent({ children, className }: DialogContentProps) {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     contentRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onOpenChange(false);
+      if (event.key === 'Escape' && !event.defaultPrevented) onOpenChange(false);
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
