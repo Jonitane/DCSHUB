@@ -13,7 +13,7 @@ export default function Header() {
         {pathname === '/' ? (
           <div className="min-w-0 leading-tight">
             <h1 className="text-base font-semibold tracking-tight text-foreground">仪表板</h1>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">模块运行与编排中心</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">模块运行与编排中心</p>
           </div>
         ) : <div />}
         <div className="app-no-drag flex items-center gap-3">

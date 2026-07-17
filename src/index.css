@@ -51,28 +51,6 @@
   --radius-2xl: 1.5rem;
 }
 
-@keyframes pulse-ring {
-  0% {
-    transform: scale(0.8);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(2);
-    opacity: 0;
-  }
-}
-
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @layer base {
   * {
     border-color: var(--color-border);
@@ -85,11 +63,16 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     background-image:
-      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(249, 115, 22, 0.08), transparent),
-      radial-gradient(ellipse 60% 40% at 100% 50%, rgba(234, 88, 12, 0.05), transparent),
-      radial-gradient(ellipse 60% 40% at 0% 80%, rgba(245, 158, 11, 0.04), transparent);
+      radial-gradient(ellipse 70% 45% at 50% -10%, rgba(64, 105, 253, 0.08), transparent),
+      radial-gradient(ellipse 50% 35% at 85% 110%, rgba(124, 92, 252, 0.05), transparent);
     background-attachment: fixed;
     min-height: 100vh;
+  }
+
+  [data-theme="light"] body {
+    background-image:
+      radial-gradient(ellipse 70% 45% at 50% -10%, rgba(59, 130, 246, 0.06), transparent),
+      radial-gradient(ellipse 50% 35% at 85% 110%, rgba(168, 85, 247, 0.04), transparent);
   }
 
   [data-theme="dark"] { color-scheme: dark; }
@@ -125,58 +108,6 @@
 }
 
 @layer components {
-  /* 玻璃态卡片 */
-  .glass-card {
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-2xl);
-  }
-
-  /* 状态指示灯 */
-  .status-dot {
-    position: relative;
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-  }
-
-  .status-dot.running {
-    background: #22c55e;
-    box-shadow: 0 0 10px #22c55e, 0 0 20px rgba(34, 197, 94, 0.5);
-  }
-
-  .status-dot.running::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    background: #22c55e;
-    animation: pulse-ring 2s ease-out infinite;
-  }
-
-  .status-dot.stopped {
-    background: #6b7280;
-  }
-
-  /* 渐变文字 */
-  .text-gradient {
-    background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-
-  /* 模块卡片悬停效果 */
-  .module-card {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  .module-card:hover {
-    transform: translateY(-2px);
-  }
-
   /* 滑块样式 */
   input[type='range'] {
     -webkit-appearance: none;
@@ -196,79 +127,11 @@
     border-radius: 50%;
     background: var(--color-primary);
     cursor: pointer;
-    box-shadow: 0 2px 8px rgba(249, 115, 22, 0.35);
     transition: all 0.2s ease;
   }
 
   input[type='range']::-webkit-slider-thumb:hover {
     transform: scale(1.1);
-    box-shadow: 0 2px 12px rgba(249, 115, 22, 0.5);
-  }
-
-  /* 开关样式 */
-  .toggle-switch {
-    position: relative;
-    width: 48px;
-    height: 26px;
-    border-radius: 13px;
-    background: var(--color-secondary);
-    cursor: pointer;
-    transition: all 0.3s ease;
-  }
-
-  .toggle-switch.active {
-    background: var(--color-primary);
-    box-shadow: 0 2px 10px rgba(249, 115, 22, 0.3);
-  }
-
-  .toggle-switch::after {
-    content: '';
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: white;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  }
-
-  .toggle-switch.active::after {
-    left: 25px;
-  }
-
-  /* 页面进入动画 */
-  .page-enter {
-    animation: slideIn 0.4s ease-out;
-  }
-
-  /* 侧边栏菜单项 */
-  .sidebar-item {
-    position: relative;
-    transition: all 0.2s ease;
-  }
-
-  .sidebar-item::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 3px;
-    height: 0;
-    border-radius: 0 2px 2px 0;
-    background: var(--color-primary);
-    transition: height 0.3s ease;
-  }
-
-  .sidebar-item.active::before {
-    height: 60%;
-  }
-
-  .sidebar-item.active {
-    background: rgba(249, 115, 22, 0.12);
-    color: var(--color-primary);
   }
 
   /* 手册回答 - 无序列表 */
@@ -318,5 +181,25 @@
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+
+  /* Liquid Glass 材质：半透明 + 背景模糊 + 顶部镜面高光 + 柔和投影。
+     放在 utilities 层尾部，保证覆盖组件自带的 bg/border 工具类。 */
+  .glass {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.03));
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    backdrop-filter: blur(18px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      0 10px 30px rgba(0, 0, 0, 0.25);
+  }
+
+  [data-theme="light"] .glass {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.65), rgba(255, 255, 255, 0.35));
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.9),
+      0 10px 30px rgba(0, 0, 0, 0.08);
   }
 }
