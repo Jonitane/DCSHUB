@@ -70,11 +70,26 @@ interface DialogContentProps {
 
 export function DialogContent({ children, className }: DialogContentProps) {
   const { open, onOpenChange } = useDialog();
+  const contentRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    contentRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onOpenChange(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [open, onOpenChange]);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center">
       {/* 背景遮罩 */}
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -83,8 +98,12 @@ export function DialogContent({ children, className }: DialogContentProps) {
 
       {/* 内容容器 */}
       <div
+        ref={contentRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
         className={cn(
-          'relative z-50 w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg',
+          'relative z-50 w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg outline-none',
           className,
         )}
       >
