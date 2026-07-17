@@ -1,5 +1,6 @@
 import { Route, Routes, useParams } from 'react-router-dom'
 import { Toaster } from 'sonner'
+import { RefreshCw } from 'lucide-react'
 import Layout from '@/components/Layout'
 import DashboardPage from '@/pages/DashboardPage/DashboardPage'
 import GenericModulePage from '@/pages/GenericModulePage/GenericModulePage'
@@ -19,8 +20,13 @@ const TOAST_CLASSES = {
 
 function ModuleRoute() {
   const { moduleId = '' } = useParams()
-  const { modules } = useModuleContext()
-  if (!modules.some((module) => module.id === moduleId)) return <NotFoundPage />
+  const { modules, loading } = useModuleContext()
+  if (!modules.some((module) => module.id === moduleId)) {
+    if (loading && modules.length === 0) {
+      return <div className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground"><RefreshCw className="mr-2 size-4 animate-spin" />正在加载模块…</div>
+    }
+    return <NotFoundPage />
+  }
   return <GenericModulePage moduleId={moduleId} />
 }
 
