@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, session, shell } from 'electron'
+import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { ModuleChangedEvent, ModuleLogEntry, ModuleSettings } from '../src/shared/module-contracts'
 import { ModuleManager } from './modules/ModuleManager'
 import { createEyeMouseDriver } from './integrations/eye-mouse/driver'
@@ -13,9 +14,22 @@ import { ModManagerService } from './builtins/mod-manager/service'
 import { DcsLaunchService } from './builtins/dcs-launch/service'
 import type { ModManagerSettings } from '../src/shared/mod-manager-contracts'
 import { SoftwareCatalogService } from './builtins/software-catalog/service'
+import { ManualLibraryService } from './builtins/manual-library/service'
 import { UPDATE_DOWNLOAD_URL } from '../src/shared/app-meta'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const RESET_USER_DATA_ARG = '--dcshub-reset-user-data'
+
+function resetUserDataBeforeStartup(): void {
+  if (!process.argv.includes(RESET_USER_DATA_ARG)) return
+  const userDataPath = path.resolve(app.getPath('userData'))
+  const appDataPath = path.resolve(app.getPath('appData'))
+  if (path.dirname(userDataPath).toLocaleLowerCase() !== appDataPath.toLocaleLowerCase()) throw new Error('拒绝清除非 DCSHUB 用户数据目录')
+  fs.rmSync(userDataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 })
+  fs.mkdirSync(userDataPath, { recursive: true })
+}
+
+resetUserDataBeforeStartup()
 
 process.env.DIST_ELECTRON = __dirname
 process.env.DIST = path.join(__dirname, '../dist')
@@ -27,6 +41,8 @@ let win: BrowserWindow | null = null
 let modManager: ModManagerService | null = null
 let dcsLaunch: DcsLaunchService | null = null
 let softwareCatalog: SoftwareCatalogService | null = null
+let manualLibrary: ManualLibraryService | null = null
+const manualViewerWindows = new Set<BrowserWindow>()
 const moduleManager = new ModuleManager()
 let quitCleanupStarted = false
 
@@ -65,6 +81,15 @@ function assertActionId(value: unknown): string {
 function assertText(value: unknown, label: string, maxLength = 4_096): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) throw new Error(`Invalid ${label}`)
   return value
+}
+
+function assertFilePaths(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 200) throw new Error('Invalid manual file list')
+  return value.map((filePath) => {
+    const checked = assertText(filePath, 'manual file path', 32_768)
+    if (!path.isAbsolute(checked)) throw new Error('Manual file path must be absolute')
+    return checked
+  })
 }
 
 function assertModManagerSettings(value: unknown): ModManagerSettings {
@@ -128,6 +153,14 @@ function createWindow(): void {
 
 function registerWindowIpc(): void {
   ipcMain.handle('window:open-update-page', () => shell.openExternal(UPDATE_DOWNLOAD_URL))
+  ipcMain.handle('window:reset-all-user-data', async () => {
+    moduleManager.setMonitoringActive(false)
+    await session.defaultSession.clearCache()
+    await session.defaultSession.clearStorageData()
+    const relaunchArgs = process.argv.slice(1).filter((argument) => argument !== RESET_USER_DATA_ARG)
+    app.relaunch({ args: [...relaunchArgs, RESET_USER_DATA_ARG] })
+    app.exit(0)
+  })
   ipcMain.on('window:quit', () => app.quit())
 }
 
@@ -288,10 +321,110 @@ function registerDcsIpc(): void {
   ipcMain.handle('dcs:launch-launcher', () => service().launchLauncher())
 }
 
+function registerManualLibraryIpc(): void {
+  const service = () => {
+    if (!manualLibrary) throw new Error('超级手册服务尚未初始化')
+    return manualLibrary
+  }
+  ipcMain.handle('manual-library:overview', () => service().overview())
+  ipcMain.handle('manual-library:choose-directory', async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: '选择超级手册库目录',
+      properties: ['openDirectory', 'createDirectory'],
+    }
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    return result.canceled || !result.filePaths[0] ? null : service().setLibraryPath(result.filePaths[0], true)
+  })
+  ipcMain.handle('manual-library:choose-files', async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: '添加手册',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '手册文件', extensions: ['pdf', 'docx', 'epub', 'html', 'htm', 'md', 'markdown', 'txt', 'rtf'] }],
+    }
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    return result.canceled || result.filePaths.length === 0 ? null : service().importManualFiles(result.filePaths)
+  })
+  ipcMain.handle('manual-library:import-files', (_event, filePaths: unknown) => service().importManualFiles(assertFilePaths(filePaths)))
+  ipcMain.handle('manual-library:rebuild-index', (_event, force: unknown) => service().rebuildIndex(force === true))
+  ipcMain.handle('manual-library:import-dcs-manuals', () => service().importDcsManuals())
+  ipcMain.handle('manual-library:search', (_event, query: unknown, limit: unknown) => (
+    service().search(assertText(query, 'manual search query', 500), typeof limit === 'number' ? limit : 8)
+  ))
+  ipcMain.handle('manual-library:ask', (_event, question: unknown) => service().ask(assertText(question, 'manual question', 2_000)))
+  ipcMain.handle('manual-library:ask-online', (_event, question: unknown) => service().askOnline(assertText(question, 'manual online question', 2_000)))
+  ipcMain.handle('manual-library:configure-deepseek', (_event, apiKey: unknown) => (
+    service().configureDeepSeek(assertText(apiKey, 'DeepSeek API key', 512))
+  ))
+  ipcMain.handle('manual-library:clear-deepseek', () => service().clearDeepSeek())
+  ipcMain.handle('manual-library:test-deepseek', (_event, apiKey: unknown) => (
+    service().testDeepSeek(apiKey === undefined ? undefined : assertText(apiKey, 'DeepSeek API key', 512))
+  ))
+  ipcMain.handle('manual-library:chuck-catalog', () => service().chuckCatalog())
+  ipcMain.handle('manual-library:download-chuck', (_event, guideId: unknown) => service().downloadChuckGuide(assertText(guideId, 'Chuck guide id', 64)))
+  ipcMain.handle('manual-library:download-all-chuck', () => service().downloadAllChuckGuides())
+  ipcMain.handle('manual-library:remove-dcs-duplicates', () => service().removeDuplicateDcsManuals())
+  ipcMain.handle('manual-library:complete-onboarding', () => service().completeOnboarding())
+  ipcMain.handle('manual-library:open-document', async (_event, documentId: unknown, pageNumber: unknown) => {
+    const documentPath = service().documentPath(assertText(documentId, 'manual document id', 64))
+    const page = typeof pageNumber === 'number' && Number.isInteger(pageNumber) && pageNumber > 0 ? pageNumber : undefined
+    if (page && path.extname(documentPath).toLocaleLowerCase() === '.pdf') {
+      const viewer = new BrowserWindow({
+        title: `${path.basename(documentPath)} · 第 ${page} 页`,
+        width: 1280,
+        height: 900,
+        minWidth: 760,
+        minHeight: 560,
+        autoHideMenuBar: true,
+        backgroundColor: '#202124',
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+          plugins: true,
+        },
+      })
+      viewer.setMenu(null)
+      manualViewerWindows.add(viewer)
+      viewer.on('closed', () => manualViewerWindows.delete(viewer))
+      try {
+        await viewer.loadURL(`${pathToFileURL(documentPath).href}#page=${page}&zoom=page-width`)
+        viewer.show()
+        return
+      } catch {
+        viewer.destroy()
+      }
+    }
+    const error = await shell.openPath(documentPath)
+    if (error) throw new Error(error)
+  })
+  ipcMain.handle('manual-library:open-online-source', async (_event, rawUrl: unknown) => {
+    const url = new URL(assertText(rawUrl, 'online source URL', 4_096))
+    if (url.protocol !== 'https:') throw new Error('只允许打开 HTTPS 在线来源')
+    await shell.openExternal(url.toString())
+  })
+  ipcMain.handle('manual-library:page-preview', (_event, documentId: unknown, pageNumber: unknown) => (
+    service().pagePreview(assertText(documentId, 'manual document id', 64), typeof pageNumber === 'number' ? pageNumber : 0)
+  ))
+  ipcMain.handle('manual-library:ask-screenshot', (_event, question: unknown, imageDataUrl: unknown) => (
+    service().askWithScreenshot(assertText(question, 'manual screenshot question', 2_000), assertText(imageDataUrl, 'screenshot data', 16 * 1024 * 1024))
+  ))
+}
+
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   modManager = new ModManagerService(app.getPath('userData'))
   dcsLaunch = new DcsLaunchService(app.getPath('userData'))
+  manualLibrary = new ManualLibraryService(
+    app.getPath('userData'),
+    {
+      available: () => safeStorage.isEncryptionAvailable(),
+      protect: (value) => safeStorage.encryptString(value).toString('base64'),
+      unprotect: (value) => safeStorage.decryptString(Buffer.from(value, 'base64')),
+    },
+    () => dcsLaunch?.status().installPath || null,
+    fetch,
+    (progress) => win?.webContents.send('manual-library:progress', progress),
+  )
   softwareCatalog = new SoftwareCatalogService(app.getPath('userData'), moduleManager, [
     { id: 'voxbind', createDriver: createVoxBindDriver },
     { id: 'srs', createDriver: createSrsDriver },
@@ -303,11 +436,13 @@ app.whenReady().then(async () => {
   registerModuleIpc()
   registerModManagerIpc()
   registerDcsIpc()
+  registerManualLibraryIpc()
   registerSoftwareCatalogIpc()
   registerWindowIpc()
   moduleManager.setMonitoringActive(false)
   await moduleManager.initialize()
   createWindow()
+  win?.webContents.once('did-finish-load', () => { void manualLibrary?.ensureCurrentSearchIndexes() })
 })
 
 app.on('before-quit', (event) => {

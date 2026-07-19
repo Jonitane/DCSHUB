@@ -66,9 +66,10 @@ export function DialogTrigger({ children }: DialogTriggerProps) {
 interface DialogContentProps {
   children: React.ReactNode;
   className?: string;
+  overlayClassName?: string;
 }
 
-export function DialogContent({ children, className }: DialogContentProps) {
+export function DialogContent({ children, className, overlayClassName }: DialogContentProps) {
   const { open, onOpenChange } = useDialog();
   const contentRef = React.useRef<HTMLDivElement>(null);
 
@@ -89,7 +90,7 @@ export function DialogContent({ children, className }: DialogContentProps) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center">
+    <div className={cn('fixed inset-0 z-[70] flex items-center justify-center', overlayClassName)}>
       {/* 背景遮罩 */}
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
