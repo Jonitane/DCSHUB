@@ -4,7 +4,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import AdmZip from 'adm-zip'
 import MiniSearch from 'minisearch'
-import pdfParse from 'pdf-parse/lib/pdf-parse.js'
+import { extractText, getDocumentProxy } from 'unpdf'
 import type {
   ChuckGuideCatalogItem,
   DcsManualImportResult,
@@ -60,10 +60,6 @@ interface SearchableChunk {
 interface ExtractedPage {
   page: number | null
   text: string
-}
-
-interface PdfPageLike {
-  getTextContent: () => Promise<{ items: Array<{ str?: string }> }>
 }
 
 interface DeepSeekResponse {
@@ -647,16 +643,14 @@ export class ManualLibraryService {
   }
 
   private async parsePdf(filePath: string): Promise<ExtractedPage[]> {
-    const pages: ExtractedPage[] = []
-    await pdfParse(fs.readFileSync(filePath), {
-      pagerender: async (page: PdfPageLike) => {
-        const content = await page.getTextContent()
-        const text = content.items.map((item) => item.str || '').join(' ')
-        pages.push({ page: pages.length + 1, text })
-        return text
-      },
-    })
-    return pages
+    const data = new Uint8Array(fs.readFileSync(filePath))
+    const document = await getDocumentProxy(data)
+    try {
+      const { text } = await extractText(document, { mergePages: false })
+      return text.map((pageText, index) => ({ page: index + 1, text: pageText }))
+    } finally {
+      await document.destroy()
+    }
   }
 
   private async expandSearchQueries(apiKey: string, question: string): Promise<string[]> {
