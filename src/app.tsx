@@ -7,6 +7,7 @@ import GenericModulePage from '@/pages/GenericModulePage/GenericModulePage'
 import SettingsPage from '@/pages/SettingsPage/SettingsPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import ModManagerPage from '@/pages/ModManagerPage/ModManagerPage'
+import ManualLibraryPage from '@/pages/ManualLibraryPage/ManualLibraryPage'
 import { useModuleContext } from '@/modules/ModuleContext'
 
 const TOAST_CLASSES = {
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="module/:moduleId" element={<ModuleRoute />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="mod-manager" element={<ModManagerPage />} />
+          <Route path="manual-library" element={<ManualLibraryPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>

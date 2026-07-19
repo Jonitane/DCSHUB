@@ -2,6 +2,17 @@
 
 本项目从 V1.6 开始通过 GitHub Releases 记录公开版本。
 
+## V1.8.0 - 2026-07-19
+
+- 新增“DCS 智能手册”内置程序和独立侧边栏入口。
+- 支持 PDF、DOCX、EPUB、HTML、Markdown、TXT 与 RTF 手册的本地永久索引。
+- 使用文件大小、修改时间和 SHA-256 内容指纹进行增量更新；未变化时直接使用压缩缓存，不在后台重复解析。
+- 支持一键复制 DCS 客户端各模块 Doc 目录中的手册并入库。
+- 支持用户选择机型后从 Chuck's Guides 官方页面下载 PDF 并自动入库，不随 DCSHUB 重新分发第三方手册。
+- 接入用户自备的 DeepSeek API Key，默认使用 `deepseek-v4-flash`，可选 `deepseek-v4-pro`。
+- DeepSeek Key 使用 Windows Safe Storage 加密保存；问答只发送命中的少量文字片段，并返回本地手册来源。
+- 预留截图提问接口；当前版本仅开放文字检索和文字问答。
+
 ## V1.7.2 - 2026-07-17
 
 - 修复模块路由首次加载时短暂显示 404 页的问题。

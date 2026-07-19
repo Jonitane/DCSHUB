@@ -1,6 +1,6 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Settings, Monitor, Gamepad2, Eye, Package, Rocket, PackageOpen, Plus, LoaderCircle, LogOut } from 'lucide-react'
+import { LayoutDashboard, Settings, Monitor, Gamepad2, Eye, Package, Rocket, PackageOpen, Plus, LoaderCircle, LogOut, BookOpenText } from 'lucide-react'
 import { toast } from 'sonner'
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem } from '@/components/ui/sidebar'
 import { Image } from '@/components/ui/image'
@@ -153,6 +153,12 @@ export default function AppSidebar() {
       <SidebarFooter className="border-t border-sidebar-border">
         <SidebarGroup className="p-1.5">
           <SidebarMenu className="gap-0.5">
+            <SidebarMenuItem>
+              <NavLink to="/manual-library" className={navItemClass(pathname.startsWith('/manual-library'))}>
+                <span className={navIconClass(pathname.startsWith('/manual-library'))}><BookOpenText className="size-[15px]" /></span>
+                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">智能手册</span>
+              </NavLink>
+            </SidebarMenuItem>
             <SidebarMenuItem>
               <NavLink to="/mod-manager" className={navItemClass(pathname.startsWith('/mod-manager'))}>
                 <span className={navIconClass(pathname.startsWith('/mod-manager'))}><PackageOpen className="size-[15px]" /></span>

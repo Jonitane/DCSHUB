@@ -7,3 +7,7 @@ The MIT License in this repository applies to DCSHUB's original source code. Pro
 Files under `public/images` and `public/modules` may contain compatibility-oriented product identifiers or visual assets. They are included only to identify software supported by DCSHUB. Rights holders may open an issue or contact the maintainer to request correction or removal.
 
 DCS World and the DCS logo are trademarks of Eagle Dynamics SA. All other trademarks are the property of their respective owners.
+
+Chuck's Guides are created and distributed by their respective author through https://chucksguides.com/. DCSHUB does not bundle, mirror, sublicense, or commit those PDF files. It only offers user-initiated downloads from the official website into the user's private local library.
+
+DeepSeek is an independent online service. DCSHUB does not include a shared API key or resell API access; each user supplies and pays for their own account and remains subject to DeepSeek's terms and data policies.

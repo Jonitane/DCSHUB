@@ -3,6 +3,7 @@ import type { ModManagerBridge, ModManagerSettings } from '../src/shared/mod-man
 import type { DcsBridge } from '../src/shared/dcs-contracts'
 import type { SoftwareCatalogBridge } from '../src/shared/software-catalog-contracts'
 import type { WindowControlsBridge } from '../src/shared/window-contracts'
+import type { DeepSeekConfigurationStatus, ManualLibraryBridge } from '../src/shared/manual-library-contracts'
 
 const { contextBridge, ipcRenderer } = require('electron') as typeof import('electron')
 
@@ -77,11 +78,27 @@ const softwareCatalog: SoftwareCatalogBridge = {
   completeInitialSetup: (enabledIds: string[]) => ipcRenderer.invoke('software-catalog:complete-setup', enabledIds),
 }
 
+const manualLibrary: ManualLibraryBridge = {
+  overview: () => ipcRenderer.invoke('manual-library:overview'),
+  chooseLibraryDirectory: () => ipcRenderer.invoke('manual-library:choose-directory'),
+  rebuildIndex: (force = false) => ipcRenderer.invoke('manual-library:rebuild-index', force),
+  importDcsManuals: () => ipcRenderer.invoke('manual-library:import-dcs-manuals'),
+  search: (query: string, limit = 8) => ipcRenderer.invoke('manual-library:search', query, limit),
+  ask: (question: string) => ipcRenderer.invoke('manual-library:ask', question),
+  configureDeepSeek: (apiKey: string, model: DeepSeekConfigurationStatus['model']) => ipcRenderer.invoke('manual-library:configure-deepseek', apiKey, model),
+  clearDeepSeek: () => ipcRenderer.invoke('manual-library:clear-deepseek'),
+  testDeepSeek: (apiKey?: string, model?: DeepSeekConfigurationStatus['model']) => ipcRenderer.invoke('manual-library:test-deepseek', apiKey, model),
+  chuckCatalog: () => ipcRenderer.invoke('manual-library:chuck-catalog'),
+  downloadChuckGuide: (guideId: string) => ipcRenderer.invoke('manual-library:download-chuck', guideId),
+  openDocument: (documentId: string) => ipcRenderer.invoke('manual-library:open-document', documentId),
+  askWithScreenshot: (question: string, imageDataUrl: string) => ipcRenderer.invoke('manual-library:ask-screenshot', question, imageDataUrl),
+}
+
 const windowControls: WindowControlsBridge = {
   quit: () => ipcRenderer.send('window:quit'),
   openUpdatePage: () => ipcRenderer.invoke('window:open-update-page'),
 }
 
-contextBridge.exposeInMainWorld('electronAPI', { modules, modManager, dcs, softwareCatalog, windowControls })
+contextBridge.exposeInMainWorld('electronAPI', { modules, modManager, dcs, softwareCatalog, manualLibrary, windowControls })
 
 export {}

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ModuleChangedEvent, ModuleLogEntry, ModuleSettings } from '../src/shared/module-contracts'
@@ -13,6 +13,8 @@ import { ModManagerService } from './builtins/mod-manager/service'
 import { DcsLaunchService } from './builtins/dcs-launch/service'
 import type { ModManagerSettings } from '../src/shared/mod-manager-contracts'
 import { SoftwareCatalogService } from './builtins/software-catalog/service'
+import { ManualLibraryService } from './builtins/manual-library/service'
+import type { DeepSeekConfigurationStatus } from '../src/shared/manual-library-contracts'
 import { UPDATE_DOWNLOAD_URL } from '../src/shared/app-meta'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -27,6 +29,7 @@ let win: BrowserWindow | null = null
 let modManager: ModManagerService | null = null
 let dcsLaunch: DcsLaunchService | null = null
 let softwareCatalog: SoftwareCatalogService | null = null
+let manualLibrary: ManualLibraryService | null = null
 const moduleManager = new ModuleManager()
 let quitCleanupStarted = false
 
@@ -64,6 +67,11 @@ function assertActionId(value: unknown): string {
 
 function assertText(value: unknown, label: string, maxLength = 4_096): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) throw new Error(`Invalid ${label}`)
+  return value
+}
+
+function assertDeepSeekModel(value: unknown): DeepSeekConfigurationStatus['model'] {
+  if (value !== 'deepseek-v4-flash' && value !== 'deepseek-v4-pro') throw new Error('Invalid DeepSeek model')
   return value
 }
 
@@ -288,10 +296,60 @@ function registerDcsIpc(): void {
   ipcMain.handle('dcs:launch-launcher', () => service().launchLauncher())
 }
 
+function registerManualLibraryIpc(): void {
+  const service = () => {
+    if (!manualLibrary) throw new Error('智能手册服务尚未初始化')
+    return manualLibrary
+  }
+  ipcMain.handle('manual-library:overview', () => service().overview())
+  ipcMain.handle('manual-library:choose-directory', async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: '选择 DCS 智能手册库目录',
+      properties: ['openDirectory', 'createDirectory'],
+    }
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    return result.canceled || !result.filePaths[0] ? null : service().setLibraryPath(result.filePaths[0])
+  })
+  ipcMain.handle('manual-library:rebuild-index', (_event, force: unknown) => service().rebuildIndex(force === true))
+  ipcMain.handle('manual-library:import-dcs-manuals', () => service().importDcsManuals())
+  ipcMain.handle('manual-library:search', (_event, query: unknown, limit: unknown) => (
+    service().search(assertText(query, 'manual search query', 500), typeof limit === 'number' ? limit : 8)
+  ))
+  ipcMain.handle('manual-library:ask', (_event, question: unknown) => service().ask(assertText(question, 'manual question', 2_000)))
+  ipcMain.handle('manual-library:configure-deepseek', (_event, apiKey: unknown, model: unknown) => (
+    service().configureDeepSeek(assertText(apiKey, 'DeepSeek API key', 512), assertDeepSeekModel(model))
+  ))
+  ipcMain.handle('manual-library:clear-deepseek', () => service().clearDeepSeek())
+  ipcMain.handle('manual-library:test-deepseek', (_event, apiKey: unknown, model: unknown) => (
+    service().testDeepSeek(
+      apiKey === undefined ? undefined : assertText(apiKey, 'DeepSeek API key', 512),
+      model === undefined ? undefined : assertDeepSeekModel(model),
+    )
+  ))
+  ipcMain.handle('manual-library:chuck-catalog', () => service().chuckCatalog())
+  ipcMain.handle('manual-library:download-chuck', (_event, guideId: unknown) => service().downloadChuckGuide(assertText(guideId, 'Chuck guide id', 64)))
+  ipcMain.handle('manual-library:open-document', async (_event, documentId: unknown) => {
+    const error = await shell.openPath(service().documentPath(assertText(documentId, 'manual document id', 64)))
+    if (error) throw new Error(error)
+  })
+  ipcMain.handle('manual-library:ask-screenshot', (_event, question: unknown, imageDataUrl: unknown) => (
+    service().askWithScreenshot(assertText(question, 'manual screenshot question', 2_000), assertText(imageDataUrl, 'screenshot data', 16 * 1024 * 1024))
+  ))
+}
+
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   modManager = new ModManagerService(app.getPath('userData'))
   dcsLaunch = new DcsLaunchService(app.getPath('userData'))
+  manualLibrary = new ManualLibraryService(
+    app.getPath('userData'),
+    {
+      available: () => safeStorage.isEncryptionAvailable(),
+      protect: (value) => safeStorage.encryptString(value).toString('base64'),
+      unprotect: (value) => safeStorage.decryptString(Buffer.from(value, 'base64')),
+    },
+    () => dcsLaunch?.status().installPath || null,
+  )
   softwareCatalog = new SoftwareCatalogService(app.getPath('userData'), moduleManager, [
     { id: 'voxbind', createDriver: createVoxBindDriver },
     { id: 'srs', createDriver: createSrsDriver },
@@ -303,6 +361,7 @@ app.whenReady().then(async () => {
   registerModuleIpc()
   registerModManagerIpc()
   registerDcsIpc()
+  registerManualLibraryIpc()
   registerSoftwareCatalogIpc()
   registerWindowIpc()
   moduleManager.setMonitoringActive(false)
