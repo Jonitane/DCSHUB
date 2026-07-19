@@ -3,9 +3,9 @@ import type { ModManagerBridge, ModManagerSettings } from '../src/shared/mod-man
 import type { DcsBridge } from '../src/shared/dcs-contracts'
 import type { SoftwareCatalogBridge } from '../src/shared/software-catalog-contracts'
 import type { WindowControlsBridge } from '../src/shared/window-contracts'
-import type { DeepSeekConfigurationStatus, ManualLibraryBridge } from '../src/shared/manual-library-contracts'
+import type { ManualLibraryBridge, ManualLibraryProgress } from '../src/shared/manual-library-contracts'
 
-const { contextBridge, ipcRenderer } = require('electron') as typeof import('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron') as typeof import('electron')
 
 const modules: ModuleBridge = {
   list: () => ipcRenderer.invoke('modules:list'),
@@ -81,22 +81,36 @@ const softwareCatalog: SoftwareCatalogBridge = {
 const manualLibrary: ManualLibraryBridge = {
   overview: () => ipcRenderer.invoke('manual-library:overview'),
   chooseLibraryDirectory: () => ipcRenderer.invoke('manual-library:choose-directory'),
+  chooseManualFiles: () => ipcRenderer.invoke('manual-library:choose-files'),
+  importDroppedFiles: (files: ReadonlyArray<unknown>) => ipcRenderer.invoke('manual-library:import-files', files.map((file) => webUtils.getPathForFile(file as never))),
   rebuildIndex: (force = false) => ipcRenderer.invoke('manual-library:rebuild-index', force),
   importDcsManuals: () => ipcRenderer.invoke('manual-library:import-dcs-manuals'),
   search: (query: string, limit = 8) => ipcRenderer.invoke('manual-library:search', query, limit),
   ask: (question: string) => ipcRenderer.invoke('manual-library:ask', question),
-  configureDeepSeek: (apiKey: string, model: DeepSeekConfigurationStatus['model']) => ipcRenderer.invoke('manual-library:configure-deepseek', apiKey, model),
+  askOnline: (question: string) => ipcRenderer.invoke('manual-library:ask-online', question),
+  configureDeepSeek: (apiKey: string) => ipcRenderer.invoke('manual-library:configure-deepseek', apiKey),
   clearDeepSeek: () => ipcRenderer.invoke('manual-library:clear-deepseek'),
-  testDeepSeek: (apiKey?: string, model?: DeepSeekConfigurationStatus['model']) => ipcRenderer.invoke('manual-library:test-deepseek', apiKey, model),
+  testDeepSeek: (apiKey?: string) => ipcRenderer.invoke('manual-library:test-deepseek', apiKey),
   chuckCatalog: () => ipcRenderer.invoke('manual-library:chuck-catalog'),
   downloadChuckGuide: (guideId: string) => ipcRenderer.invoke('manual-library:download-chuck', guideId),
-  openDocument: (documentId: string) => ipcRenderer.invoke('manual-library:open-document', documentId),
+  downloadAllChuckGuides: () => ipcRenderer.invoke('manual-library:download-all-chuck'),
+  removeDuplicateDcsManuals: () => ipcRenderer.invoke('manual-library:remove-dcs-duplicates'),
+  completeOnboarding: () => ipcRenderer.invoke('manual-library:complete-onboarding'),
+  openDocument: (documentId: string, page?: number) => ipcRenderer.invoke('manual-library:open-document', documentId, page),
+  openOnlineSource: (url: string) => ipcRenderer.invoke('manual-library:open-online-source', url),
+  pagePreview: (documentId: string, page: number) => ipcRenderer.invoke('manual-library:page-preview', documentId, page),
   askWithScreenshot: (question: string, imageDataUrl: string) => ipcRenderer.invoke('manual-library:ask-screenshot', question, imageDataUrl),
+  onProgress: (listener: (progress: ManualLibraryProgress) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: ManualLibraryProgress) => listener(progress)
+    ipcRenderer.on('manual-library:progress', handler)
+    return () => ipcRenderer.removeListener('manual-library:progress', handler)
+  },
 }
 
 const windowControls: WindowControlsBridge = {
   quit: () => ipcRenderer.send('window:quit'),
   openUpdatePage: () => ipcRenderer.invoke('window:open-update-page'),
+  resetAllUserData: () => ipcRenderer.invoke('window:reset-all-user-data'),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', { modules, modManager, dcs, softwareCatalog, manualLibrary, windowControls })

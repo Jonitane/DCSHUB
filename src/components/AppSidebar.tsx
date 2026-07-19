@@ -156,7 +156,7 @@ export default function AppSidebar() {
             <SidebarMenuItem>
               <NavLink to="/manual-library" className={navItemClass(pathname.startsWith('/manual-library'))}>
                 <span className={navIconClass(pathname.startsWith('/manual-library'))}><BookOpenText className="size-[15px]" /></span>
-                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">智能手册</span>
+                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">超级手册</span>
               </NavLink>
             </SidebarMenuItem>
             <SidebarMenuItem>

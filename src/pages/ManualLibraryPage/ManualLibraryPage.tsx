@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   BookCopy,
   BookOpenText,
@@ -8,31 +11,67 @@ import {
   Database,
   Download,
   ExternalLink,
+  FilePlus2,
   FileText,
   FolderOpen,
+  Globe2,
   HardDrive,
   KeyRound,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   RefreshCw,
-  Search,
   Send,
-  ShieldCheck,
+  Settings2,
   Sparkles,
-  Trash2,
+  UploadCloud,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Image } from '@/components/ui/image'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { cn } from '@/lib/utils'
 import type {
-  ChuckGuideCatalogItem,
-  DeepSeekConfigurationStatus,
+  ManualDocumentRecord,
   ManualLibraryOverview,
+  ManualOnlineSearchAnswer,
+  ManualLibraryProgress,
+  ManualPagePreview,
   ManualQuestionAnswer,
 } from '@/shared/manual-library-contracts'
+
+type ManualCategory = 'aircraft' | 'user' | 'chuck' | 'campaign' | 'terrain' | 'other' | 'all'
+
+const MANUAL_CATEGORY_LABELS: Record<ManualCategory, string> = {
+  aircraft: '飞行模组手册',
+  user: '用户手册',
+  chuck: 'Chuck 手册',
+  campaign: '战役文档',
+  terrain: '地图文档',
+  other: '其他 DCS 文档',
+  all: '全部手册',
+}
+
+function manualCategory(document: ManualDocumentRecord): Exclude<ManualCategory, 'all'> {
+  if (document.sourceKind === 'user') return 'user'
+  if (document.sourceKind === 'chuck') return 'chuck'
+  const relativePath = document.relativePath.replace(/\\/g, '/').toLocaleLowerCase()
+  if (/(?:^|\/)(?:mods|coremods)\/aircraft\//.test(relativePath)) return 'aircraft'
+  if (/(?:^|\/)(?:mods|coremods)\/campaigns\//.test(relativePath)) return 'campaign'
+  if (/(?:^|\/)(?:mods|coremods)\/terrains\//.test(relativePath)) return 'terrain'
+  return 'other'
+}
+
+function documentSourceDetail(document: ManualDocumentRecord): string {
+  if (document.sourceKind === 'user') return '用户添加'
+  if (document.sourceKind === 'chuck') return "Chuck's Guides"
+  return MANUAL_CATEGORY_LABELS[manualCategory(document)]
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`
@@ -41,43 +80,150 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1_073_741_824).toFixed(2)} GB`
 }
 
-function sourceLabel(source: 'user' | 'dcs' | 'chuck'): string {
-  if (source === 'dcs') return 'DCS 客户端'
-  if (source === 'chuck') return "Chuck's Guides"
-  return '用户手册'
+function ProgressPanel({ progress }: { progress: ManualLibraryProgress }) {
+  return (
+    <div className="rounded-xl border border-primary/25 bg-card/90 p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0"><p className="text-sm font-medium">{progress.message}</p>{progress.itemName && <p className="mt-1 truncate text-xs text-muted-foreground" title={progress.itemName}>{progress.itemName}</p>}</div>
+        <span className="shrink-0 font-mono text-sm font-semibold text-primary">{progress.percent}%</span>
+      </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted/70"><div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${progress.percent}%` }} /></div>
+      {progress.total > 1 && <p className="mt-2 text-right text-[10px] text-muted-foreground">{Math.min(progress.current, progress.total)} / {progress.total}</p>}
+    </div>
+  )
+}
+
+function AnswerWithPageImages({ response, previews, loading, onExpand }: {
+  response: ManualQuestionAnswer
+  previews: ManualPagePreview[]
+  loading: boolean
+  onExpand: (preview: ManualPagePreview) => void
+}) {
+  const previewByPage = new Map(previews.map((preview) => [`${preview.documentId}:${preview.page}`, preview]))
+  const sourcePreviews = response.sources.map((source) => source.page ? previewByPage.get(`${source.documentId}:${source.page}`) : undefined)
+  const rendered = new Set<string>()
+  const paragraphs = response.answer.split(/\n{2,}/).filter(Boolean).reduce<string[]>((blocks, block) => {
+    const previous = blocks.at(-1)
+    const listItem = /^\s*(?:[-*+]\s|\d+[.)]\s)/
+    if (previous && listItem.test(previous) && listItem.test(block)) blocks[blocks.length - 1] = `${previous}\n\n${block}`
+    else blocks.push(block)
+    return blocks
+  }, [])
+
+  const pageCard = (preview: ManualPagePreview, sourceNumber: number) => {
+    const key = `${preview.documentId}:${preview.page}`
+    rendered.add(key)
+    return (
+      <button key={key} type="button" className="group w-full overflow-hidden rounded-xl border border-primary/20 bg-background/55 text-left shadow-sm transition-colors hover:border-primary/45" onClick={() => onExpand(preview)}>
+        <div className="flex max-h-[520px] justify-center overflow-hidden bg-white/95 p-1.5"><Image src={preview.imageDataUrl} alt={`${preview.documentName} 第 ${preview.page} 页`} className="h-auto max-h-[500px] w-auto max-w-full object-contain transition-transform duration-300 group-hover:scale-[1.015]" /></div>
+        <div className="flex items-center justify-between gap-3 px-3 py-2 text-[11px]"><span className="truncate font-medium">S{sourceNumber} · 第 {preview.page} 页</span><span className="flex shrink-0 items-center gap-1 text-muted-foreground"><Maximize2 className="size-3" />放大</span></div>
+      </button>
+    )
+  }
+
+  const markdown = (content: string) => (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => <h2 className="mb-3 mt-1 text-xl font-semibold tracking-tight text-foreground">{children}</h2>,
+        h2: ({ children }) => <h3 className="mb-2 mt-5 border-l-2 border-primary pl-3 text-lg font-semibold text-foreground">{children}</h3>,
+        h3: ({ children }) => <h4 className="mb-2 mt-4 text-base font-semibold text-foreground">{children}</h4>,
+        p: ({ children }) => <p className="my-2 text-sm leading-7 text-foreground/90">{children}</p>,
+        ul: ({ children }) => <ul className="my-3 space-y-1.5 pl-5 text-sm leading-7 [list-style-type:disc] marker:text-primary">{children}</ul>,
+        ol: ({ children }) => <ol className="my-3 space-y-2 pl-5 text-sm leading-7 [list-style-type:decimal] marker:font-semibold marker:text-primary">{children}</ol>,
+        li: ({ children }) => <li className="pl-1 text-foreground/90">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+        blockquote: ({ children }) => <blockquote className="my-3 rounded-r-lg border-l-2 border-amber-400/70 bg-amber-500/5 px-4 py-2 text-sm text-foreground/85">{children}</blockquote>,
+        code: ({ children }) => <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em] text-primary">{children}</code>,
+        table: ({ children }) => <div className="my-4 overflow-x-auto rounded-lg border border-border/60"><table className="w-full border-collapse text-left text-xs">{children}</table></div>,
+        th: ({ children }) => <th className="border-b border-border/60 bg-muted/55 px-3 py-2 font-semibold">{children}</th>,
+        td: ({ children }) => <td className="border-b border-border/35 px-3 py-2 align-top leading-5">{children}</td>,
+        hr: () => <hr className="my-5 border-border/50" />,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  )
+
+  return (
+    <div className="space-y-4">
+      {paragraphs.map((paragraph, paragraphIndex) => {
+        const sourceNumbers = [...paragraph.matchAll(/\[S(\d+)\]/g)]
+          .map((match) => Number(match[1]))
+          .filter((number) => number >= 1 && number <= sourcePreviews.length)
+        const inlinePreviews = [...new Set(sourceNumbers)]
+          .map((sourceNumber) => ({ sourceNumber, preview: sourcePreviews[sourceNumber - 1] }))
+          .filter((item): item is { sourceNumber: number; preview: ManualPagePreview } => Boolean(item.preview))
+          .filter(({ preview }) => !rendered.has(`${preview.documentId}:${preview.page}`))
+        return (
+          <section key={`${paragraphIndex}:${paragraph.slice(0, 24)}`} className={cn('min-w-0', inlinePreviews.length > 0 && 'grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(280px,38%)]')}>
+            <div className="min-w-0">{markdown(paragraph)}</div>
+            {inlinePreviews.length > 0 && <aside className="space-y-3 xl:sticky xl:top-2">{inlinePreviews.map(({ preview, sourceNumber }) => pageCard(preview, sourceNumber))}</aside>}
+          </section>
+        )
+      })}
+      {!loading && previews.filter((preview) => !rendered.has(`${preview.documentId}:${preview.page}`)).slice(0, 2).map((preview) => {
+        const sourceNumber = response.sources.findIndex((source) => source.documentId === preview.documentId && source.page === preview.page) + 1
+        return <div className="ml-auto max-w-xl" key={`${preview.documentId}:${preview.page}:fallback`}>{pageCard(preview, Math.max(1, sourceNumber))}</div>
+      })}
+      {loading && <div className="flex h-24 items-center justify-center rounded-xl border border-border/40 bg-background/30 text-xs text-muted-foreground"><LoaderCircle className="mr-2 size-4 animate-spin" />正在生成回答中的手册页面…</div>}
+    </div>
+  )
 }
 
 export default function ManualLibraryPage() {
+  const navigate = useNavigate()
   const bridge = window.electronAPI?.manualLibrary
   const [overview, setOverview] = useState<ManualLibraryOverview | null>(null)
-  const [catalog, setCatalog] = useState<ChuckGuideCatalogItem[]>([])
   const [loading, setLoading] = useState(true)
   const [operation, setOperation] = useState<string | null>(null)
+  const [progress, setProgress] = useState<ManualLibraryProgress | null>(null)
+  const [setupOpen, setSetupOpen] = useState(false)
+  const [setupDcs, setSetupDcs] = useState(true)
+  const [setupChuck, setSetupChuck] = useState(false)
   const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState<DeepSeekConfigurationStatus['model']>('deepseek-v4-flash')
-  const [selectedGuide, setSelectedGuide] = useState('')
   const [question, setQuestion] = useState('')
   const [response, setResponse] = useState<ManualQuestionAnswer | null>(null)
+  const [answeredQuestion, setAnsweredQuestion] = useState('')
+  const [onlineResponse, setOnlineResponse] = useState<ManualOnlineSearchAnswer | null>(null)
+  const [addOpen, setAddOpen] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
+  const [pagePreviews, setPagePreviews] = useState<ManualPagePreview[]>([])
+  const [previewsLoading, setPreviewsLoading] = useState(false)
+  const [expandedPreview, setExpandedPreview] = useState<ManualPagePreview | null>(null)
+  const [documentCategory, setDocumentCategory] = useState<ManualCategory>('aircraft')
+  const [askFocusMode, setAskFocusMode] = useState(false)
+  const [libraryOpen, setLibraryOpen] = useState(false)
 
   const refresh = useCallback(async () => {
     if (!bridge) return
     setLoading(true)
     try {
-      const [nextOverview, nextCatalog] = await Promise.all([bridge.overview(), bridge.chuckCatalog()])
-      setOverview(nextOverview)
-      setModel(nextOverview.deepSeek.model)
-      setCatalog(nextCatalog)
-      setSelectedGuide((current) => current || nextCatalog.find((guide) => !guide.installed)?.id || nextCatalog[0]?.id || '')
+      const next = await bridge.overview()
+      setOverview(next)
+      if (next.configured && !next.onboardingCompleted) setSetupOpen(true)
     } catch (reason) {
-      toast.error('智能手册加载失败', { description: reason instanceof Error ? reason.message : String(reason) })
+      toast.error('超级手册加载失败', { description: reason instanceof Error ? reason.message : String(reason) })
     } finally {
       setLoading(false)
     }
   }, [bridge])
 
   useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => bridge?.onProgress(setProgress), [bridge])
+  useEffect(() => {
+    if (!askFocusMode) return
+    const leaveFocusMode = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !expandedPreview && !libraryOpen && !addOpen && !setupOpen) setAskFocusMode(false)
+    }
+    window.addEventListener('keydown', leaveFocusMode)
+    return () => window.removeEventListener('keydown', leaveFocusMode)
+  }, [addOpen, askFocusMode, expandedPreview, libraryOpen, setupOpen])
 
-  const selectedCatalogGuide = useMemo(() => catalog.find((guide) => guide.id === selectedGuide), [catalog, selectedGuide])
+  const finishOperation = () => {
+    setOperation(null)
+    window.setTimeout(() => setProgress(null), 900)
+  }
 
   const chooseLibrary = async () => {
     if (!bridge) return
@@ -86,12 +232,13 @@ export default function ManualLibraryPage() {
       const next = await bridge.chooseLibraryDirectory()
       if (next) {
         setOverview(next)
+        if (!next.onboardingCompleted) setSetupOpen(true)
         toast.success('手册库目录已设置')
       }
     } catch (reason) {
       toast.error('设置手册库失败', { description: reason instanceof Error ? reason.message : String(reason) })
     } finally {
-      setOperation(null)
+      finishOperation()
     }
   }
 
@@ -106,89 +253,94 @@ export default function ManualLibraryPage() {
     } catch (reason) {
       toast.error('索引失败', { description: reason instanceof Error ? reason.message : String(reason) })
     } finally {
-      setOperation(null)
+      finishOperation()
     }
   }
 
-  const importDcsManuals = async () => {
-    if (!bridge) return
-    setOperation('dcs')
+  const applyImportResult = async (task: Promise<{ ok: boolean; message: string; overview?: ManualLibraryOverview } | null>) => {
+    setOperation('manual-import')
     try {
-      const result = await bridge.importDcsManuals()
+      const result = await task
+      if (!result) return
       if (result.overview) setOverview(result.overview)
-      if (result.ok) toast.success(result.message)
-      else toast.error('DCS 手册导入失败', { description: result.message })
-      setCatalog(await bridge.chuckCatalog())
+      if (result.ok) {
+        toast.success(result.message)
+        setAddOpen(false)
+      } else toast.error('添加手册失败', { description: result.message })
     } catch (reason) {
-      toast.error('DCS 手册导入失败', { description: reason instanceof Error ? reason.message : String(reason) })
+      toast.error('添加手册失败', { description: reason instanceof Error ? reason.message : String(reason) })
     } finally {
-      setOperation(null)
+      finishOperation()
     }
   }
 
-  const saveDeepSeek = async () => {
+  const chooseManualFiles = () => {
     if (!bridge) return
-    setOperation('deepseek')
-    try {
-      const next = await bridge.configureDeepSeek(apiKey, model)
-      setOverview(next)
-      setApiKey('')
-      toast.success('DeepSeek 已连接，API Key 已加密保存')
-    } catch (reason) {
-      toast.error('DeepSeek 连接失败', { description: reason instanceof Error ? reason.message : String(reason) })
-    } finally {
-      setOperation(null)
-    }
+    void applyImportResult(bridge.chooseManualFiles())
   }
 
-  const testDeepSeek = async () => {
+  const importDroppedFiles = (files: FileList) => {
+    if (!bridge || files.length === 0) return
+    void applyImportResult(bridge.importDroppedFiles(Array.from(files)))
+  }
+
+  const loadPagePreviews = async (answer: ManualQuestionAnswer) => {
     if (!bridge) return
-    setOperation('deepseek-test')
+    const sources = answer.sources.filter((source) => source.page && source.sourcePath.toLocaleLowerCase().endsWith('.pdf'))
+    const unique = [...new Map(sources.map((source) => [`${source.documentId}:${source.page}`, source])).values()].slice(0, 6)
+    setPagePreviews([])
+    if (unique.length === 0) return
+    setPreviewsLoading(true)
     try {
-      const result = await bridge.testDeepSeek()
-      toast.success(result.message)
-    } catch (reason) {
-      toast.error('DeepSeek 连接失败', { description: reason instanceof Error ? reason.message : String(reason) })
+      const previews = await Promise.all(unique.map((source) => bridge.pagePreview(source.documentId, source.page!)))
+      setPagePreviews(previews.filter((preview): preview is ManualPagePreview => Boolean(preview)))
     } finally {
-      setOperation(null)
+      setPreviewsLoading(false)
     }
   }
 
-  const clearDeepSeek = async () => {
+  const completeInitialSetup = async (withSources: boolean) => {
     if (!bridge) return
-    setOperation('deepseek-clear')
+    setOperation('setup')
     try {
-      setOverview(await bridge.clearDeepSeek())
-      toast.success('DeepSeek API Key 已清除')
+      const userIndex = await bridge.rebuildIndex(false)
+      if (userIndex.overview) setOverview(userIndex.overview)
+      if (withSources && setupDcs) {
+        const imported = await bridge.importDcsManuals()
+        if (imported.overview) setOverview(imported.overview)
+        if (!imported.ok) toast.error('DCS 手册导入未完成', { description: imported.message })
+      }
+      if (withSources && setupChuck) {
+        const downloaded = await bridge.downloadAllChuckGuides()
+        if (downloaded.overview) setOverview(downloaded.overview)
+        if (!downloaded.ok) toast.error('部分 Chuck 手册下载失败', { description: downloaded.message })
+      }
+      if (withSources && apiKey.trim()) {
+        setOverview(await bridge.configureDeepSeek(apiKey))
+        setApiKey('')
+      }
+      const completed = await bridge.completeOnboarding()
+      setOverview(completed)
+      setSetupOpen(false)
+      toast.success('超级手册初始化完成')
     } catch (reason) {
-      toast.error('清除失败', { description: reason instanceof Error ? reason.message : String(reason) })
+      toast.error('初始化失败', { description: reason instanceof Error ? reason.message : String(reason) })
     } finally {
-      setOperation(null)
-    }
-  }
-
-  const downloadChuckGuide = async () => {
-    if (!bridge || !selectedGuide) return
-    setOperation('chuck')
-    try {
-      const result = await bridge.downloadChuckGuide(selectedGuide)
-      if (result.overview) setOverview(result.overview)
-      if (result.ok) toast.success(result.message)
-      else toast.error('下载失败', { description: result.message })
-      setCatalog(await bridge.chuckCatalog())
-    } catch (reason) {
-      toast.error('Chuck 手册下载失败', { description: reason instanceof Error ? reason.message : String(reason) })
-    } finally {
-      setOperation(null)
+      finishOperation()
     }
   }
 
   const ask = async () => {
     if (!bridge || !question.trim()) return
+    const submittedQuestion = question.trim()
     setOperation('ask')
     setResponse(null)
+    setOnlineResponse(null)
     try {
-      setResponse(await bridge.ask(question))
+      const answer = await bridge.ask(submittedQuestion)
+      setResponse(answer)
+      setAnsweredQuestion(submittedQuestion)
+      void loadPagePreviews(answer)
     } catch (reason) {
       toast.error('提问失败', { description: reason instanceof Error ? reason.message : String(reason) })
     } finally {
@@ -196,107 +348,120 @@ export default function ManualLibraryPage() {
     }
   }
 
+  const askOnline = async () => {
+    if (!bridge || !answeredQuestion) return
+    setOperation('online-search')
+    try {
+      setOnlineResponse(await bridge.askOnline(answeredQuestion))
+    } catch (reason) {
+      toast.error('在线搜索失败', { description: reason instanceof Error ? reason.message : String(reason) })
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const openOnlineSource = (url?: string) => {
+    if (!bridge || !url) return
+    void bridge.openOnlineSource(url).catch((reason) => {
+      toast.error('无法打开在线来源', { description: reason instanceof Error ? reason.message : String(reason) })
+    })
+  }
+
+  const documents = overview?.documents || []
+  const categoryCounts = documents.reduce<Record<Exclude<ManualCategory, 'all'>, number>>((counts, document) => {
+    counts[manualCategory(document)] += 1
+    return counts
+  }, { aircraft: 0, user: 0, chuck: 0, campaign: 0, terrain: 0, other: 0 })
+  const visibleDocuments = documentCategory === 'all' ? documents : documents.filter((document) => manualCategory(document) === documentCategory)
+
   if (loading && !overview) {
-    return <div className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground"><LoaderCircle className="mr-2 size-4 animate-spin" />正在读取永久索引…</div>
+    return <div className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground"><LoaderCircle className="mr-2 size-4 animate-spin" />正在读取手册索引…</div>
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2"><h1 className="text-xl font-semibold tracking-tight">DCS 智能手册</h1><Badge variant="outline" className="border-primary/30 bg-primary/8 text-primary">永久索引</Badge></div>
-          <p className="mt-1 text-sm text-muted-foreground">多语言本地手册库 · DeepSeek 文字问答 · 精确来源引用</p>
-        </div>
-        {overview?.configured && (
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => void chooseLibrary()} disabled={operation !== null}><FolderOpen className="size-4" />更换目录</Button>
-            <Button size="sm" variant="outline" onClick={() => void rebuildIndex()} disabled={operation !== null}>{operation === 'index' ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}增量刷新</Button>
-          </div>
-        )}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold tracking-tight">超级手册</h1>
+        {overview?.configured && <div className="flex items-center gap-2"><Button size="sm" onClick={() => setAddOpen(true)} disabled={operation !== null}><FilePlus2 className="size-4" />添加手册</Button><Button size="sm" variant="outline" onClick={() => void rebuildIndex()} disabled={operation !== null}>{operation === 'index' ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}刷新用户手册</Button></div>}
       </div>
 
+      {progress && operation && <ProgressPanel progress={progress} />}
+
       {!overview?.configured ? (
-        <Card className="border-primary/25 bg-card/75">
-          <CardContent className="flex min-h-[460px] flex-col items-center justify-center text-center">
-            <div className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-primary/25"><BookOpenText className="size-8 text-primary" /></div>
-            <h2 className="text-lg font-semibold">创建本地手册知识库</h2>
-            <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">选择一个长期保存手册的目录。DCSHUB 只在首次导入或手动刷新时处理文件，之后直接读取永久缓存，不会在后台反复扫描。</p>
-            <Button className="mt-6" onClick={() => void chooseLibrary()} disabled={operation !== null}>{operation === 'library' ? <LoaderCircle className="size-4 animate-spin" /> : <FolderOpen className="size-4" />}选择手册库目录</Button>
-          </CardContent>
-        </Card>
+        <Card className="border-primary/25 bg-card/75"><CardContent className="flex min-h-[460px] flex-col items-center justify-center text-center"><div className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-primary/25"><BookOpenText className="size-8 text-primary" /></div><h2 className="text-lg font-semibold">创建本地手册知识库</h2><p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">选择一个长期保存手册的目录。首次处理会显示实时进度，之后只分析新增或发生变化的用户手册。</p><Button className="mt-6" onClick={() => void chooseLibrary()} disabled={operation !== null}>{operation === 'library' ? <LoaderCircle className="size-4 animate-spin" /> : <FolderOpen className="size-4" />}选择手册库目录</Button></CardContent></Card>
       ) : (
         <>
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-3">
             <Card className="border-border/45 bg-card/70"><CardContent className="flex items-center gap-3 p-4"><Database className="size-6 text-primary" /><div><p className="text-xl font-semibold">{overview.index.documentCount}</p><p className="text-[11px] text-muted-foreground">已索引手册</p></div></CardContent></Card>
-            <Card className="border-border/45 bg-card/70"><CardContent className="flex items-center gap-3 p-4"><FileText className="size-6 text-sky-400" /><div><p className="text-xl font-semibold">{overview.index.pageCount}</p><p className="text-[11px] text-muted-foreground">可检索页面</p></div></CardContent></Card>
-            <Card className="border-border/45 bg-card/70"><CardContent className="flex items-center gap-3 p-4"><Search className="size-6 text-violet-400" /><div><p className="text-xl font-semibold">{overview.index.chunkCount}</p><p className="text-[11px] text-muted-foreground">永久检索片段</p></div></CardContent></Card>
             <Card className="border-border/45 bg-card/70"><CardContent className="flex items-center gap-3 p-4"><HardDrive className="size-6 text-emerald-400" /><div><p className="text-xl font-semibold">{formatSize(overview.index.cacheSize)}</p><p className="text-[11px] text-muted-foreground">本地索引缓存</p></div></CardContent></Card>
+            <Card role="button" tabIndex={0} className="cursor-pointer border-border/45 bg-card/70 transition-colors hover:border-primary/35 hover:bg-primary/[0.035] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onClick={() => setLibraryOpen(true)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setLibraryOpen(true) } }}><CardContent className="flex items-center gap-3 p-4"><BookOpenText className="size-6 text-sky-400" /><div className="min-w-0 flex-1"><p className="text-xl font-semibold">{overview.documents.length}</p><p className="text-[11px] text-muted-foreground">已入库手册 · 点击查看</p></div><Maximize2 className="size-4 text-muted-foreground/70" /></CardContent></Card>
           </div>
 
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.65fr)]">
-            <div className="space-y-5">
-              <Card className="border-primary/20 bg-card/75">
-                <CardHeader className="pb-4">
-                  <div className="flex items-center justify-between gap-3"><div><CardTitle className="flex items-center gap-2 text-base"><Sparkles className="size-4 text-primary" />向手册提问</CardTitle><CardDescription className="mt-1">自动检索对应语言和术语，只向 DeepSeek 发送命中的少量文字片段。</CardDescription></div><Badge variant="outline" className={overview.deepSeek.configured ? 'border-emerald-400/30 bg-emerald-500/8 text-emerald-300' : ''}>{overview.deepSeek.configured ? 'DeepSeek 已连接' : '尚未配置 API'}</Badge></div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <textarea
-                    className="min-h-28 w-full resize-y rounded-xl border border-input bg-background/55 px-4 py-3 text-sm leading-6 outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
-                    value={question}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    placeholder="例如：F/A-18C 冷启动时 INS 应该如何设置？"
-                    onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) void ask() }}
-                  />
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Button variant="outline" disabled title="接口已预留；当前 DeepSeek 仅支持文字"><Camera className="size-4" />截图提问（预留）</Button>
-                    <Button onClick={() => void ask()} disabled={operation !== null || !question.trim() || !overview.deepSeek.configured || overview.index.chunkCount === 0}>{operation === 'ask' ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}提问</Button>
-                  </div>
-                  {response && (
-                    <div className="space-y-4 border-t border-border/45 pt-4">
-                      <div className="rounded-xl border border-primary/20 bg-primary/[0.045] p-4"><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-primary"><Bot className="size-4" />{response.model}</div><div className="whitespace-pre-wrap text-sm leading-7 text-foreground/90">{response.answer}</div></div>
-                      <div><p className="mb-2 text-xs font-semibold text-muted-foreground">引用来源</p><div className="space-y-2">{response.sources.map((source, index) => <button key={source.id} type="button" className="flex w-full items-start gap-3 rounded-lg border border-border/45 bg-background/35 p-3 text-left transition-colors hover:border-primary/30 hover:bg-primary/5" onClick={() => void bridge?.openDocument(source.documentId)}><Badge variant="outline" className="mt-0.5 shrink-0">S{index + 1}</Badge><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{source.documentName}{source.page ? ` · 第 ${source.page} 页` : ''}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{source.excerpt}</p></div><ExternalLink className="mt-1 size-3.5 shrink-0 text-muted-foreground" /></button>)}</div></div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+          <div className="grid gap-5">
+            {askFocusMode && <div className="fixed inset-0 z-[90] bg-background/92 backdrop-blur-md" />}
+            <Card className={cn('border-primary/20 bg-card/75', askFocusMode && 'fixed inset-3 z-[100] flex flex-col overflow-hidden border-primary/35 bg-card/98 shadow-2xl')}>
+              <CardHeader className="shrink-0 pb-4"><div className="flex items-center justify-between gap-3"><div><CardTitle className="flex items-center gap-2 text-base"><Sparkles className="size-4 text-primary" />向手册提问</CardTitle><CardDescription className="mt-1">多路召回、融合排序并按页面去重，只向 DeepSeek 发送最相关的手册原文。</CardDescription></div><div className="flex items-center gap-2">{overview.deepSeek.configured ? <Badge variant="outline" className="border-emerald-400/30 bg-emerald-500/8 text-emerald-300">DeepSeek 已连接</Badge> : <Button size="sm" variant="outline" onClick={() => navigate('/settings')}><Settings2 className="size-3.5" />配置 API</Button>}{askFocusMode && <Button size="sm" variant="outline" onClick={() => setAskFocusMode(false)} title="也可以按 Esc 退出"><Minimize2 className="size-3.5" />退出专注</Button>}</div></div></CardHeader>
+              <CardContent className={cn('space-y-4', askFocusMode && 'min-h-0 flex-1 overflow-y-auto px-6 pb-6')}>
+                <textarea className={cn('min-h-28 w-full resize-y rounded-xl border border-input bg-background/55 px-4 py-3 text-sm leading-6 outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15', askFocusMode && 'min-h-32 resize-none')} value={question} onFocus={() => setAskFocusMode(true)} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：F/A-18C 冷启动时 INS 应该如何设置？（Enter 提问，Shift+Enter 换行）" onKeyDown={(event) => { if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.repeat) return; event.preventDefault(); if (operation === null && question.trim() && overview.deepSeek.configured && overview.index.chunkCount > 0) void ask() }} />
+                <div className="flex flex-wrap items-center justify-between gap-2"><Button variant="outline" disabled title="接口已预留；当前 DeepSeek 仅支持文字"><Camera className="size-4" />截图提问（预留）</Button><Button onClick={() => void ask()} disabled={operation !== null || !question.trim() || !overview.deepSeek.configured || overview.index.chunkCount === 0}>{operation === 'ask' ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}提问</Button></div>
+                {response && <div className="space-y-4 border-t border-border/45 pt-4">
+                  <div className="rounded-xl border border-primary/20 bg-primary/[0.045] p-4"><div className="mb-3 flex items-center gap-2 text-xs font-semibold text-primary"><Bot className="size-4" />{response.model}</div><AnswerWithPageImages response={response} previews={pagePreviews} loading={previewsLoading} onExpand={setExpandedPreview} /></div>
+                  <div className="rounded-xl border border-sky-400/20 bg-sky-500/[0.035] p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="flex items-center gap-2 text-sm font-semibold"><Globe2 className="size-4 text-sky-400" />在线搜索</p><p className="mt-1 text-xs text-muted-foreground">使用 DeepSeek V4 Pro · MAX 思考联网核对；仅在点击后调用，会产生额外耗时和 API 费用。</p></div><Button variant="outline" onClick={() => void askOnline()} disabled={operation !== null}>{operation === 'online-search' ? <LoaderCircle className="size-4 animate-spin" /> : <Globe2 className="size-4" />}{onlineResponse ? '重新搜索' : '在线搜索'}</Button></div>{onlineResponse && <div className="mt-4 border-t border-sky-400/15 pt-4"><div className="mb-3 flex items-center gap-2 text-xs font-semibold text-sky-300"><Bot className="size-4" />V4 Pro · MAX</div><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ p: ({ children }) => <p className="my-2 text-sm leading-7 text-foreground/90">{children}</p>, h2: ({ children }) => <h3 className="mb-2 mt-5 text-base font-semibold">{children}</h3>, h3: ({ children }) => <h4 className="mb-2 mt-4 text-sm font-semibold">{children}</h4>, ul: ({ children }) => <ul className="my-3 space-y-1.5 pl-5 text-sm leading-7 [list-style-type:disc] marker:text-sky-400">{children}</ul>, ol: ({ children }) => <ol className="my-3 space-y-2 pl-5 text-sm leading-7 [list-style-type:decimal] marker:text-sky-400">{children}</ol>, a: ({ href, children }) => <button type="button" className="text-sky-300 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-200" onClick={() => openOnlineSource(href)}>{children}</button> }}>{onlineResponse.answer}</ReactMarkdown>{onlineResponse.sources.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{onlineResponse.sources.map((source) => <button type="button" key={source.url} onClick={() => openOnlineSource(source.url)} className="max-w-full truncate rounded-full border border-sky-400/20 bg-sky-500/5 px-3 py-1.5 text-[11px] text-sky-200 hover:bg-sky-500/10" title={source.url}>{source.title}</button>)}</div>}</div>}</div>
+                  <div><p className="mb-2 text-xs font-semibold text-muted-foreground">引用来源</p><div className="space-y-2">{response.sources.map((source, index) => <button key={source.id} type="button" className="flex w-full items-start gap-3 rounded-lg border border-border/45 bg-background/35 p-3 text-left transition-colors hover:border-primary/30 hover:bg-primary/5" onClick={() => void bridge?.openDocument(source.documentId, source.page ?? undefined)}><Badge variant="outline" className="mt-0.5 shrink-0">S{index + 1}</Badge><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{source.documentName}{source.page ? ` · 第 ${source.page} 页` : ''}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{source.excerpt}</p></div><ExternalLink className="mt-1 size-3.5 shrink-0 text-muted-foreground" /></button>)}</div></div>
+                </div>}
+              </CardContent>
+            </Card>
 
-              <Card className="border-border/45 bg-card/70">
-                <CardHeader className="pb-4"><CardTitle className="flex items-center gap-2 text-base"><BookCopy className="size-4 text-sky-400" />手册来源</CardTitle><CardDescription>复制操作不会修改 DCS 客户端中的原文件。</CardDescription></CardHeader>
-                <CardContent className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-xl border border-border/45 bg-background/35 p-4"><div className="flex items-center gap-2 text-sm font-semibold"><BookOpenText className="size-4 text-sky-400" />DCS 客户端手册</div><p className="mt-2 text-xs leading-5 text-muted-foreground">自动查找各机型和地图模块的 Doc 目录，复制到知识库并增量索引。</p><Button className="mt-4 w-full" variant="outline" onClick={() => void importDcsManuals()} disabled={operation !== null}>{operation === 'dcs' ? <LoaderCircle className="size-4 animate-spin" /> : <BookCopy className="size-4" />}复制 DCS 手册</Button></div>
-                  <div className="rounded-xl border border-border/45 bg-background/35 p-4"><div className="flex items-center gap-2 text-sm font-semibold"><Download className="size-4 text-amber-400" />Chuck's Guides</div><p className="mt-2 text-xs leading-5 text-muted-foreground">从 Chuck 官方页面下载用户主动选择的机型手册，不随 DCSHUB 分发。</p><div className="mt-3 flex gap-2"><Select value={selectedGuide} onValueChange={setSelectedGuide}><SelectTrigger className="min-w-0 flex-1"><SelectValue placeholder="选择机型" /></SelectTrigger><SelectContent>{catalog.map((guide) => <SelectItem key={guide.id} value={guide.id}>{guide.displayName}{guide.installed ? ' · 已入库' : ''}</SelectItem>)}</SelectContent></Select><Button className="shrink-0" variant="outline" onClick={() => void downloadChuckGuide()} disabled={operation !== null || !selectedGuide}>{operation === 'chuck' ? <LoaderCircle className="size-4 animate-spin" /> : selectedCatalogGuide?.installed ? <RefreshCw className="size-4" /> : <Download className="size-4" />}{selectedCatalogGuide?.installed ? '更新' : '下载'}</Button></div></div>
-                </CardContent>
-              </Card>
-            </div>
-
-            <div className="space-y-5">
-              <Card className="border-violet-400/20 bg-card/75">
-                <CardHeader className="pb-4"><CardTitle className="flex items-center gap-2 text-base"><KeyRound className="size-4 text-violet-300" />DeepSeek API</CardTitle><CardDescription>密钥使用 Windows 当前用户凭据加密保存。</CardDescription></CardHeader>
-                <CardContent className="space-y-3">
-                  {overview.deepSeek.configured ? (
-                    <>
-                      <div className="flex items-center gap-3 rounded-lg border border-emerald-400/20 bg-emerald-500/7 p-3"><ShieldCheck className="size-5 text-emerald-400" /><div className="min-w-0 flex-1"><p className="text-sm font-medium">API Key 已安全保存</p><p className="text-[11px] text-muted-foreground">模型：{overview.deepSeek.model}</p></div><CheckCircle2 className="size-4 text-emerald-400" /></div>
-                      <div className="grid grid-cols-2 gap-2"><Button variant="outline" onClick={() => void testDeepSeek()} disabled={operation !== null}>{operation === 'deepseek-test' ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}测试连接</Button><Button variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => void clearDeepSeek()} disabled={operation !== null}><Trash2 className="size-4" />重新配置</Button></div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="space-y-2"><Label htmlFor="deepseek-key">API Key</Label><Input id="deepseek-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-…" /></div>
-                      <div className="space-y-2"><Label>回答模型</Label><Select value={model} onValueChange={(value) => setModel(value as DeepSeekConfigurationStatus['model'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="deepseek-v4-flash">V4 Flash · 快速低成本</SelectItem><SelectItem value="deepseek-v4-pro">V4 Pro · 更强理解</SelectItem></SelectContent></Select></div>
-                      <Button className="w-full" onClick={() => void saveDeepSeek()} disabled={operation !== null || apiKey.trim().length < 10}>{operation === 'deepseek' ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}测试并保存</Button>
-                    </>
-                  )}
-                  <p className="text-[11px] leading-5 text-muted-foreground">当前仅发送问题和最相关的手册文字片段。截图接口已预留，但 DeepSeek 暂不支持图片输入。</p>
-                </CardContent>
-              </Card>
-
-              <Card className="border-border/45 bg-card/70">
-                <CardHeader className="pb-3"><div className="flex items-center justify-between"><CardTitle className="text-base">已入库手册</CardTitle><Badge variant="outline">{overview.documents.length}</Badge></div><CardDescription className="truncate" title={overview.libraryPath || ''}>{overview.libraryPath}</CardDescription></CardHeader>
-                <CardContent><div className="max-h-[440px] space-y-1.5 overflow-y-auto pr-1">{overview.documents.length === 0 ? <div className="flex min-h-40 flex-col items-center justify-center text-center text-sm text-muted-foreground"><FileText className="mb-3 size-8 opacity-40" /><p>目录中还没有可检索手册</p><p className="mt-1 text-xs">复制 DCS 手册或自行放入文件后刷新</p></div> : overview.documents.map((document) => <button key={document.id} type="button" className="flex w-full items-center gap-3 rounded-lg border border-transparent p-2.5 text-left transition-colors hover:border-border/55 hover:bg-accent/35" onClick={() => void bridge?.openDocument(document.id)}><div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/60"><FileText className="size-4 text-primary/80" /></div><div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{document.name}</p><p className="mt-1 truncate text-[10px] text-muted-foreground">{sourceLabel(document.sourceKind)} · {document.language.toUpperCase()} · {document.pageCount} 页</p></div><ExternalLink className="size-3.5 shrink-0 text-muted-foreground/60" /></button>)}</div></CardContent>
-              </Card>
-            </div>
           </div>
         </>
       )}
+
+      <Dialog open={libraryOpen} onOpenChange={setLibraryOpen}>
+        <DialogContent className="flex h-[84vh] max-w-5xl flex-col overflow-hidden">
+          <DialogHeader className="shrink-0"><div className="flex items-center justify-between gap-4 pr-8"><div className="min-w-0"><DialogTitle>已入库手册</DialogTitle><DialogDescription className="mt-1 max-w-2xl truncate"><span title={overview?.libraryPath || ''}>{overview?.libraryPath}</span></DialogDescription></div><Badge variant="outline">{visibleDocuments.length} / {overview?.documents.length || 0}</Badge></div></DialogHeader>
+          {overview && <><div className="shrink-0"><Select value={documentCategory} onValueChange={(value) => setDocumentCategory(value as ManualCategory)}><SelectTrigger className="h-9 w-full sm:w-80"><SelectValue /></SelectTrigger><SelectContent>{(['aircraft', 'user', 'chuck', 'campaign', 'terrain', 'other', 'all'] as ManualCategory[]).map((category) => <SelectItem key={category} value={category}>{MANUAL_CATEGORY_LABELS[category]}（{category === 'all' ? overview.documents.length : categoryCounts[category]}）</SelectItem>)}</SelectContent></Select></div><div className="min-h-0 flex-1 overflow-y-auto pr-1"><div className="grid gap-2 sm:grid-cols-2">{visibleDocuments.length === 0 ? <div className="col-span-full flex min-h-56 flex-col items-center justify-center text-center text-sm text-muted-foreground"><FileText className="mb-3 size-8 opacity-40" /><p>当前分类中没有手册</p><p className="mt-1 text-xs">可以切换其他分类或添加新手册</p></div> : visibleDocuments.map((document) => <button key={document.id} type="button" className="flex w-full items-center gap-3 rounded-lg border border-border/35 bg-background/30 p-3 text-left transition-colors hover:border-primary/30 hover:bg-primary/5" onClick={() => void bridge?.openDocument(document.id)}><div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60"><FileText className="size-4 text-primary/80" /></div><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{document.name}</p><p className="mt-1 truncate text-[11px] text-muted-foreground">{documentSourceDetail(document)} · {document.aircraft || document.language.toUpperCase()} · {document.pageCount} 页</p></div><ExternalLink className="size-3.5 shrink-0 text-muted-foreground/60" /></button>)}</div></div></>}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(expandedPreview)} onOpenChange={(open) => { if (!open) setExpandedPreview(null) }}>
+        <DialogContent overlayClassName="z-[120]" className="flex h-[92vh] max-w-[94vw] flex-col overflow-hidden p-3">
+          {expandedPreview && <><DialogHeader><DialogTitle className="truncate pr-8 text-sm">{expandedPreview.documentName} · 第 {expandedPreview.page} 页</DialogTitle><DialogDescription>手册内容区域，可按 Esc 或点击背景关闭。</DialogDescription></DialogHeader><div className="min-h-0 flex-1 overflow-auto rounded-lg bg-white/95 p-2"><Image src={expandedPreview.imageDataUrl} alt={`${expandedPreview.documentName} 第 ${expandedPreview.page} 页`} className="mx-auto h-auto max-w-full object-contain" /></div><DialogFooter className="pt-2"><Button variant="outline" onClick={() => setExpandedPreview(null)}>关闭</Button><Button onClick={() => void bridge?.openDocument(expandedPreview.documentId, expandedPreview.page)}><ExternalLink className="size-4" />定位到原手册</Button></DialogFooter></>}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={addOpen} onOpenChange={(open) => { if (operation === null) setAddOpen(open) }}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader><DialogTitle>添加手册</DialogTitle><DialogDescription>文件会复制到手册库并自动建立增量索引；相同内容不会重复添加。</DialogDescription></DialogHeader>
+          <div
+            className={`mt-4 flex min-h-56 flex-col items-center justify-center rounded-2xl border border-dashed p-8 text-center transition-colors ${dragActive ? 'border-primary bg-primary/10 ring-2 ring-primary/15' : 'border-border/70 bg-background/35 hover:border-primary/45 hover:bg-primary/[0.035]'}`}
+            onDragEnter={(event) => { event.preventDefault(); setDragActive(true) }}
+            onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDragActive(true) }}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false) }}
+            onDrop={(event) => { event.preventDefault(); setDragActive(false); importDroppedFiles(event.dataTransfer.files) }}
+          >
+            {operation === 'manual-import' ? <LoaderCircle className="mb-4 size-10 animate-spin text-primary" /> : <UploadCloud className={`mb-4 size-10 ${dragActive ? 'text-primary' : 'text-muted-foreground'}`} />}
+            <p className="text-sm font-semibold">{operation === 'manual-import' ? '正在复制并索引手册…' : '把手册拖到这里'}</p>
+            <p className="mt-2 text-xs text-muted-foreground">支持 PDF、DOCX、EPUB、HTML、Markdown、TXT 和 RTF</p>
+            <Button className="mt-5" variant="outline" onClick={chooseManualFiles} disabled={operation !== null}><FilePlus2 className="size-4" />选择文件</Button>
+          </div>
+          {progress && operation === 'manual-import' && <ProgressPanel progress={progress} />}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={setupOpen} onOpenChange={(open) => { if (operation === null && open) setSetupOpen(true) }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle>首次设置超级手册</DialogTitle><DialogDescription>选择需要建立的手册来源，并可立即配置 DeepSeek。完成后这些选项只在“设置”中显示。</DialogDescription></DialogHeader>
+          <div className="mt-5 space-y-4">
+            {progress && operation === 'setup' && <ProgressPanel progress={progress} />}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/50 bg-card/55 p-4"><Checkbox checked={setupDcs} onCheckedChange={setSetupDcs} disabled={operation !== null} /><div><p className="flex items-center gap-2 text-sm font-semibold"><BookCopy className="size-4 text-sky-400" />DCS 官方英文手册</p><p className="mt-1 text-xs leading-5 text-muted-foreground">仅复制英文版，生成独立固定索引。</p></div></label>
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/50 bg-card/55 p-4"><Checkbox checked={setupChuck} onCheckedChange={setSetupChuck} disabled={operation !== null} /><div><p className="flex items-center gap-2 text-sm font-semibold"><Download className="size-4 text-amber-400" />全部 Chuck 手册</p><p className="mt-1 text-xs leading-5 text-muted-foreground">下载量较大，也可以稍后在设置中按机型选择。</p></div></label>
+            </div>
+            <div className="rounded-xl border border-violet-400/20 bg-violet-500/[0.035] p-4"><div className="mb-3 flex items-center gap-2 text-sm font-semibold"><KeyRound className="size-4 text-violet-300" />DeepSeek API（可稍后设置）</div><Input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-…" disabled={operation !== null} /><p className="mt-2 text-[11px] leading-5 text-muted-foreground">手册问答固定使用 V4 Flash；主动在线搜索使用 V4 Pro MAX。</p></div>
+          </div>
+          <DialogFooter className="mt-6 gap-2"><Button variant="ghost" onClick={() => void completeInitialSetup(false)} disabled={operation !== null}>{operation === 'setup' ? <LoaderCircle className="size-4 animate-spin" /> : null}稍后设置</Button><Button onClick={() => void completeInitialSetup(true)} disabled={operation !== null || (apiKey.length > 0 && apiKey.trim().length < 10)}>{operation === 'setup' ? <LoaderCircle className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}开始初始化</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

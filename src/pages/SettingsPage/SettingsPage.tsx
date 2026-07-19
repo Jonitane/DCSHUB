@@ -3,12 +3,14 @@ import { ChevronDown, CircleAlert, FolderOpen, Gamepad2, HardDrive, LoaderCircle
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Image } from '@/components/ui/image'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/app-settings'
 import { useModuleContext } from '@/modules/ModuleContext'
+import ManualLibrarySettingsCard from '@/components/ManualLibrarySettingsCard'
 import type { DcsInstallationStatus } from '@/shared/dcs-contracts'
 import type { SoftwareCatalogOverview } from '@/shared/software-catalog-contracts'
 
@@ -25,6 +27,8 @@ export default function SettingsPage() {
   const [dcsStatus, setDcsStatus] = useState<DcsInstallationStatus | null>(null)
   const [catalog, setCatalog] = useState<SoftwareCatalogOverview | null>(null)
   const [catalogOperation, setCatalogOperation] = useState<CatalogOperation | null>(null)
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetting, setResetting] = useState(false)
 
   useEffect(() => {
     setSettings(loadAppSettings(lifecycleModuleIds))
@@ -135,6 +139,16 @@ export default function SettingsPage() {
 
   const enabledSoftwareCount = catalog?.items.filter((item) => item.enabled).length || 0
 
+  const resetAllUserData = async () => {
+    setResetting(true)
+    try {
+      await window.electronAPI?.windowControls.resetAllUserData()
+    } catch (reason) {
+      setResetting(false)
+      toast.error('清除失败', { description: reason instanceof Error ? reason.message : String(reason) })
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="mb-6 flex items-center gap-3">
@@ -218,6 +232,12 @@ export default function SettingsPage() {
           <p className="text-[10px] text-muted-foreground">重新识别或修改内置模块路径前，请先停止对应软件。关闭接入不会强制结束外部程序。</p>
         </CardContent>}
       </Card>
+
+      <ManualLibrarySettingsCard />
+
+      <Card className="border-red-400/20 bg-red-500/[0.025]"><CardContent className="flex flex-wrap items-center gap-4 p-5"><div className="flex size-10 items-center justify-center rounded-xl bg-red-500/10 ring-1 ring-red-400/20"><Trash2 className="size-5 text-red-400" /></div><div className="min-w-0 flex-1"><p className="text-sm font-semibold text-red-300">清除所有设置与缓存</p><p className="mt-1 text-xs text-muted-foreground">恢复 DCSHUB 首次运行状态并自动重新启动</p></div><Button variant="destructive" size="sm" onClick={() => setResetOpen(true)}>清除缓存</Button></CardContent></Card>
+
+      <Dialog open={resetOpen} onOpenChange={(next) => { if (!resetting) setResetOpen(next) }}><DialogContent><DialogHeader><DialogTitle className="flex items-center gap-2 text-red-300"><CircleAlert className="size-5" />确认清除全部 DCSHUB 数据？</DialogTitle><DialogDescription>这会删除软件路径、软件预设、模组管理状态、超级手册索引、API Key、主题和语言等设置，然后自动重启。不会删除用户手册原文件、模组仓库、游戏文件或备份目录中的文件。</DialogDescription></DialogHeader><DialogFooter className="mt-6 gap-2"><Button variant="outline" onClick={() => setResetOpen(false)} disabled={resetting}>取消</Button><Button variant="destructive" onClick={() => void resetAllUserData()} disabled={resetting}>{resetting ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}清除并重新启动</Button></DialogFooter></DialogContent></Dialog>
     </div>
   )
 }
