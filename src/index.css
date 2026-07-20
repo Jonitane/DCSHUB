@@ -29,9 +29,9 @@
   --color-sidebar-border: var(--sidebar-border);
 
   /* 品牌色 */
-  --color-pimax: #10b981;
-  --color-pimax-light: #34d399;
-  --color-pimax-dark: #059669;
+  --color-pimax: #f97316;
+  --color-pimax-light: #fb923c;
+  --color-pimax-dark: #ea580c;
   --color-moza: #f59e0b;
   --color-moza-light: #fbbf24;
   --color-moza-dark: #d97706;
@@ -40,8 +40,8 @@
   --color-eyemouse-dark: #ca8a04;
 
   /* 字体 */
-  --font-sans: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-sans: 'MiSans', 'Noto Sans SC', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Source Code Pro', 'Consolas', monospace;
 
   /* 圆角 */
   --radius-sm: 0.375rem;
@@ -85,9 +85,9 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     background-image:
-      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(45, 212, 191, 0.08), transparent),
-      radial-gradient(ellipse 60% 40% at 100% 50%, rgba(16, 185, 129, 0.05), transparent),
-      radial-gradient(ellipse 60% 40% at 0% 80%, rgba(245, 158, 11, 0.05), transparent);
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(249, 115, 22, 0.08), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 50%, rgba(234, 88, 12, 0.05), transparent),
+      radial-gradient(ellipse 60% 40% at 0% 80%, rgba(245, 158, 11, 0.04), transparent);
     background-attachment: fixed;
     min-height: 100vh;
   }
@@ -162,7 +162,7 @@
 
   /* 渐变文字 */
   .text-gradient {
-    background: linear-gradient(135deg, #2dd4bf 0%, #0d9488 100%);
+    background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -196,13 +196,13 @@
     border-radius: 50%;
     background: var(--color-primary);
     cursor: pointer;
-    box-shadow: 0 0 10px rgba(45, 212, 191, 0.5);
+    box-shadow: 0 2px 8px rgba(249, 115, 22, 0.35);
     transition: all 0.2s ease;
   }
 
   input[type='range']::-webkit-slider-thumb:hover {
     transform: scale(1.1);
-    box-shadow: 0 0 15px rgba(45, 212, 191, 0.7);
+    box-shadow: 0 2px 12px rgba(249, 115, 22, 0.5);
   }
 
   /* 开关样式 */
@@ -218,7 +218,7 @@
 
   .toggle-switch.active {
     background: var(--color-primary);
-    box-shadow: 0 0 15px rgba(45, 212, 191, 0.4);
+    box-shadow: 0 2px 10px rgba(249, 115, 22, 0.3);
   }
 
   .toggle-switch::after {
@@ -267,8 +267,51 @@
   }
 
   .sidebar-item.active {
-    background: rgba(45, 212, 191, 0.1);
+    background: rgba(249, 115, 22, 0.12);
     color: var(--color-primary);
+  }
+
+  /* 手册回答 - 无序列表 */
+  .answer-list-unordered {
+    list-style-type: disc;
+    padding-left: 1.25rem;
+  }
+  .answer-list-unordered > li {
+    padding-left: 0.25rem;
+    position: relative;
+  }
+  .answer-list-unordered > li::marker {
+    color: rgba(var(--color-primary), 0.7);
+    color: color-mix(in srgb, var(--color-primary) 70%, transparent);
+  }
+
+  /* 手册回答 - 有序列表 - 自定义数字徽章 */
+  .answer-list-ordered {
+    list-style: none;
+    padding-left: 0;
+    counter-reset: answer-step;
+  }
+  .answer-list-ordered > li {
+    position: relative;
+    padding-left: 2.1rem;
+    counter-increment: answer-step;
+  }
+  .answer-list-ordered > li::before {
+    content: counter(answer-step);
+    position: absolute;
+    left: 0;
+    top: 0.18rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.45rem;
+    height: 1.45rem;
+    border-radius: 0.4rem;
+    background: color-mix(in srgb, var(--color-primary) 18%, transparent);
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--color-primary);
+    line-height: 1;
   }
 }
 

@@ -196,4 +196,6 @@ export class DcsLaunchService {
     fs.rmSync(this.settingsPath, { force: true })
     fs.renameSync(temporaryPath, this.settingsPath)
   }
+
+  async dispose(): Promise<void> {}
 }

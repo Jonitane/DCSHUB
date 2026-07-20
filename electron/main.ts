@@ -19,17 +19,24 @@ import { UPDATE_DOWNLOAD_URL } from '../src/shared/app-meta'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RESET_USER_DATA_ARG = '--dcshub-reset-user-data'
+const PRESERVE_DIRS_ON_RESET = new Set(['Cache', 'Code Cache', 'GPUCache', 'DawnCache', 'DawnWebGPUCache', 'Local Storage', 'Session Storage', 'Partitions', 'Network', 'blob_storage', 'Service Worker', 'webrtc_event_logs', 'extensions', 'Extension State', 'Extension Rules', 'IndexedDB', 'Shared Dictionary', 'Temp', 'Fonts', 'Default', 'Preferences', 'Last Version run.flag', 'lockfile'])
+const PRESERVE_FILES_ON_RESET = new Set(['Preferences', 'Local State', 'lockfile', 'SingletonLock', 'SingletonCookie', 'SingletonSocket'])
 
-function resetUserDataBeforeStartup(): void {
+function resetAppDataIfRequested(): void {
   if (!process.argv.includes(RESET_USER_DATA_ARG)) return
   const userDataPath = path.resolve(app.getPath('userData'))
   const appDataPath = path.resolve(app.getPath('appData'))
   if (path.dirname(userDataPath).toLocaleLowerCase() !== appDataPath.toLocaleLowerCase()) throw new Error('拒绝清除非 DCSHUB 用户数据目录')
-  fs.rmSync(userDataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 })
-  fs.mkdirSync(userDataPath, { recursive: true })
+  for (const entry of fs.readdirSync(userDataPath, { withFileTypes: true })) {
+    if (PRESERVE_DIRS_ON_RESET.has(entry.name)) continue
+    if (PRESERVE_FILES_ON_RESET.has(entry.name)) continue
+    if (entry.isDirectory() && entry.name.startsWith('Crashpad')) continue
+    const fullPath = path.join(userDataPath, entry.name)
+    fs.rmSync(fullPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  }
 }
 
-resetUserDataBeforeStartup()
+resetAppDataIfRequested()
 
 process.env.DIST_ELECTRON = __dirname
 process.env.DIST = path.join(__dirname, '../dist')
@@ -154,12 +161,18 @@ function createWindow(): void {
 function registerWindowIpc(): void {
   ipcMain.handle('window:open-update-page', () => shell.openExternal(UPDATE_DOWNLOAD_URL))
   ipcMain.handle('window:reset-all-user-data', async () => {
-    moduleManager.setMonitoringActive(false)
-    await session.defaultSession.clearCache()
-    await session.defaultSession.clearStorageData()
+    try { moduleManager?.setMonitoringActive(false) } catch {}
+    try { await moduleManager?.dispose() } catch {}
+    try { dcsLaunch?.dispose?.() } catch {}
+    try { modManager?.dispose?.() } catch {}
+    for (const viewer of [...manualViewerWindows]) { try { viewer.destroy() } catch {} }
+    manualViewerWindows.clear()
+    try { win?.close() } catch {}
+    try { await session.defaultSession.clearCache() } catch {}
+    try { await session.defaultSession.clearStorageData({ storages: ['cookies', 'filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers', 'cachestorage'] }) } catch {}
     const relaunchArgs = process.argv.slice(1).filter((argument) => argument !== RESET_USER_DATA_ARG)
     app.relaunch({ args: [...relaunchArgs, RESET_USER_DATA_ARG] })
-    app.exit(0)
+    setTimeout(() => app.exit(0), 200)
   })
   ipcMain.on('window:quit', () => app.quit())
 }
@@ -327,6 +340,7 @@ function registerManualLibraryIpc(): void {
     return manualLibrary
   }
   ipcMain.handle('manual-library:overview', () => service().overview())
+  ipcMain.handle('manual-library:current-progress', () => service().currentOperationProgress())
   ipcMain.handle('manual-library:choose-directory', async () => {
     const options: Electron.OpenDialogOptions = {
       title: '选择超级手册库目录',
@@ -361,6 +375,10 @@ function registerManualLibraryIpc(): void {
   ))
   ipcMain.handle('manual-library:chuck-catalog', () => service().chuckCatalog())
   ipcMain.handle('manual-library:download-chuck', (_event, guideId: unknown) => service().downloadChuckGuide(assertText(guideId, 'Chuck guide id', 64)))
+  ipcMain.handle('manual-library:download-selected-chuck', (_event, guideIds: unknown) => {
+    if (!Array.isArray(guideIds)) throw new Error('guideIds must be an array')
+    return service().downloadSelectedChuckGuides(guideIds.map((id) => assertText(id, 'Chuck guide id', 64)))
+  })
   ipcMain.handle('manual-library:download-all-chuck', () => service().downloadAllChuckGuides())
   ipcMain.handle('manual-library:remove-dcs-duplicates', () => service().removeDuplicateDcsManuals())
   ipcMain.handle('manual-library:complete-onboarding', () => service().completeOnboarding())
