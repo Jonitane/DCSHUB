@@ -2,7 +2,7 @@ import type { ModuleBridge } from '@/shared/module-contracts'
 import type { ModManagerBridge } from '@/shared/mod-manager-contracts'
 import type { DcsBridge } from '@/shared/dcs-contracts'
 import type { SoftwareCatalogBridge } from '@/shared/software-catalog-contracts'
-import type { WindowControlsBridge } from '@/shared/window-contracts'
+import type { WindowControlsBridge, OverlayBridge } from '@/shared/window-contracts'
 import type { ManualLibraryBridge } from '@/shared/manual-library-contracts'
 
 export {}
@@ -16,6 +16,7 @@ declare global {
       softwareCatalog: SoftwareCatalogBridge
       manualLibrary: ManualLibraryBridge
       windowControls: WindowControlsBridge
+      overlay: OverlayBridge
     }
   }
 }

@@ -8,6 +8,7 @@ import SettingsPage from '@/pages/SettingsPage/SettingsPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import ModManagerPage from '@/pages/ModManagerPage/ModManagerPage'
 import ManualLibraryPage from '@/pages/ManualLibraryPage/ManualLibraryPage'
+import OverlayPage from '@/pages/OverlayPage/OverlayPage'
 import { useModuleContext } from '@/modules/ModuleContext'
 
 const TOAST_CLASSES = {
@@ -31,7 +32,17 @@ function ModuleRoute() {
   return <GenericModulePage moduleId={moduleId} />
 }
 
+function isOverlayMode(): boolean {
+  if (typeof window === 'undefined') return false
+  const params = new URLSearchParams(window.location.search)
+  return params.get('overlay') === '1'
+}
+
 export default function App() {
+  if (isOverlayMode()) {
+    return <OverlayPage />
+  }
+
   return (
     <div>
       <Toaster position="top-left" toastOptions={{ style: { width: '14rem' }, classNames: TOAST_CLASSES }} />

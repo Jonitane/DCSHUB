@@ -22,9 +22,9 @@ export default function Layout() {
     <SidebarProvider>
       <InitialSoftwareSetup />
       <AppSidebar />
-      <SidebarInset className="flex flex-col min-w-0 overflow-x-hidden">
+      <SidebarInset className="flex h-screen flex-col min-w-0 overflow-hidden">
         <Header />
-        <main className="flex-1 w-full overflow-y-auto px-6 lg:px-8 py-6">
+        <main className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden px-6 lg:px-8 py-6">
           <Outlet />
         </main>
       </SidebarInset>

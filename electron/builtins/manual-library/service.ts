@@ -117,11 +117,18 @@ interface StoredAnswerCacheEntry {
   answer: ManualQuestionAnswer
 }
 
+interface StoredOnlineAnswerCacheEntry {
+  key: string
+  savedAt: string
+  answer: ManualOnlineSearchAnswer
+}
+
 type FetchLike = typeof fetch
 type ProgressReporter = (progress: ManualLibraryProgress) => void
 
 const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.markdown', '.html', '.htm', '.docx', '.epub', '.rtf'])
 const DEFAULT_MODEL: DeepSeekConfigurationStatus['model'] = 'deepseek-v4-flash'
+const ONLINE_SEARCH_MODEL = 'deepseek-v4-pro' as const
 const PAGE_CHUNK_PREFER_LENGTH = 3_200
 const CHUNK_LENGTH = 2_600
 const CHUNK_OVERLAP = 350
@@ -130,8 +137,10 @@ const ANSWER_SOURCES = 10
 const RRF_K = 60
 const PAGE_CONTEXT_LENGTH = 6_000
 const RETRIEVAL_PIPELINE_VERSION = 'v24'
-const ANSWER_CACHE_VERSION = 1
-const MAX_ANSWER_CACHE_ENTRIES = 100
+const ANSWER_CACHE_VERSION = 2
+const ONLINE_ANSWER_CACHE_VERSION = 1
+const MAX_ANSWER_CACHE_ENTRIES = 500
+const MAX_ONLINE_ANSWER_CACHE_ENTRIES = 200
 
 const SEARCH_SCHEMA = {
   id: 'string',
@@ -957,6 +966,7 @@ export class ManualLibraryService {
   private readonly documentCachePath: string
   private readonly pagePreviewCachePath: string
   private readonly answerCachePath: string
+  private readonly onlineAnswerCachePath: string
   private readonly protector: SecretProtector
   private readonly dcsRootProvider: () => string | null
   private readonly fetchImpl: FetchLike
@@ -969,6 +979,7 @@ export class ManualLibraryService {
   private readonly rerankCache = new Map<string, string[]>()
   private readonly documentChunksCache = new Map<string, SearchableChunk[]>()
   private readonly answerCache = new Map<string, StoredAnswerCacheEntry>()
+  private readonly onlineAnswerCache = new Map<string, StoredOnlineAnswerCacheEntry>()
   private indexing: Promise<ManualOperationResult> | null = null
   private indexError: string | undefined
   private currentProgress: ManualLibraryProgress | null = null
@@ -991,6 +1002,7 @@ export class ManualLibraryService {
     this.documentCachePath = path.join(storagePath, 'documents')
     this.pagePreviewCachePath = path.join(storagePath, 'page-previews')
     this.answerCachePath = path.join(storagePath, 'verified-answer-cache-v1.json.gz')
+    this.onlineAnswerCachePath = path.join(storagePath, 'online-answer-cache-v1.json.gz')
     this.protector = protector
     this.dcsRootProvider = dcsRootProvider
     this.fetchImpl = fetchImpl
@@ -998,6 +1010,7 @@ export class ManualLibraryService {
     this.settings = this.loadSettings()
     this.manifest = this.loadManifest()
     this.loadAnswerCache()
+    this.loadOnlineAnswerCache()
   }
 
   overview(): ManualLibraryOverview {
@@ -1032,6 +1045,7 @@ export class ManualLibraryService {
       this.searchIndexes.clear()
       this.documentChunksCache.clear()
       this.clearAnswerCache()
+      this.clearOnlineAnswerCache()
       for (const indexPath of Object.values(this.indexPaths)) fs.rmSync(indexPath, { force: true })
       this.saveManifest()
     }
@@ -1989,6 +2003,12 @@ export class ManualLibraryService {
   async askOnline(question: string): Promise<ManualOnlineSearchAnswer> {
     const cleaned = normalizeQuestionInput(question).slice(0, 2_000)
     if (!cleaned) throw new Error('请输入问题')
+    const cacheKey = this.onlineAnswerCacheKey(cleaned)
+    const cached = this.onlineAnswerCache.get(cacheKey)
+    if (cached) {
+      if (process.env.DCSHUB_DEBUG_MANUAL === '1') console.log('[manual-library] Online cache hit')
+      return structuredClone(cached.answer)
+    }
     const apiKey = this.readApiKey()
     const response = await this.fetchWithTimeout('https://api.deepseek.com/anthropic/v1/messages', {
       method: 'POST',
@@ -1998,7 +2018,7 @@ export class ManualLibraryService {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'deepseek-v4-pro',
+        model: ONLINE_SEARCH_MODEL,
         max_tokens: 6_000,
         thinking: { type: 'enabled', budget_tokens: 12_000 },
         output_config: { effort: 'max' },
@@ -2025,7 +2045,9 @@ export class ManualLibraryService {
     visit(payload.content)
     const answer = textBlocks.join('\n\n').trim().replace(/\n{3,}/g, '\n\n')
     if (!answer) throw new Error('DeepSeek 在线搜索没有返回可用答案')
-    return { answer, sources: [...sources.values()].slice(0, 20), model: 'deepseek-v4-pro' }
+    const result = { answer, sources: [...sources.values()].slice(0, 20), model: ONLINE_SEARCH_MODEL }
+    this.cacheOnlineAnswer(cacheKey, result)
+    return result
   }
 
   chuckCatalog(): ChuckGuideCatalogItem[] {
@@ -2619,6 +2641,41 @@ export class ManualLibraryService {
   private clearAnswerCache(): void {
     this.answerCache.clear()
     try { fs.rmSync(this.answerCachePath, { force: true }) } catch { /* Best-effort cache invalidation. */ }
+  }
+
+  private onlineAnswerCacheKey(question: string): string {
+    return crypto.createHash('sha256').update([
+      ONLINE_ANSWER_CACHE_VERSION,
+      ONLINE_SEARCH_MODEL,
+      question.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim(),
+    ].join('\n')).digest('hex')
+  }
+
+  private loadOnlineAnswerCache(): void {
+    try {
+      const parsed = JSON.parse(zlib.gunzipSync(fs.readFileSync(this.onlineAnswerCachePath)).toString('utf8')) as { version?: number; entries?: StoredOnlineAnswerCacheEntry[] }
+      if (parsed.version !== ONLINE_ANSWER_CACHE_VERSION || !Array.isArray(parsed.entries)) return
+      for (const entry of parsed.entries.slice(-MAX_ONLINE_ANSWER_CACHE_ENTRIES)) {
+        if (entry?.key && entry.answer?.answer && Array.isArray(entry.answer.sources)) this.onlineAnswerCache.set(entry.key, entry)
+      }
+    } catch { /* First run or an obsolete cache. */ }
+  }
+
+  private saveOnlineAnswerCache(): void {
+    const entries = [...this.onlineAnswerCache.values()].slice(-MAX_ONLINE_ANSWER_CACHE_ENTRIES)
+    atomicWrite(this.onlineAnswerCachePath, zlib.gzipSync(Buffer.from(JSON.stringify({ version: ONLINE_ANSWER_CACHE_VERSION, entries }), 'utf8'), { level: 6 }))
+  }
+
+  private cacheOnlineAnswer(key: string, answer: ManualOnlineSearchAnswer): void {
+    if (this.onlineAnswerCache.has(key)) this.onlineAnswerCache.delete(key)
+    this.onlineAnswerCache.set(key, { key, savedAt: new Date().toISOString(), answer })
+    while (this.onlineAnswerCache.size > MAX_ONLINE_ANSWER_CACHE_ENTRIES) this.onlineAnswerCache.delete(this.onlineAnswerCache.keys().next().value as string)
+    this.saveOnlineAnswerCache()
+  }
+
+  private clearOnlineAnswerCache(): void {
+    this.onlineAnswerCache.clear()
+    try { fs.rmSync(this.onlineAnswerCachePath, { force: true }) } catch { /* Best-effort cache invalidation. */ }
   }
 
   private requireLibraryPath(): string {

@@ -1,7 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, safeStorage, screen, session, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import type { ModuleChangedEvent, ModuleLogEntry, ModuleSettings } from '../src/shared/module-contracts'
 import { ModuleManager } from './modules/ModuleManager'
 import { createEyeMouseDriver } from './integrations/eye-mouse/driver'
@@ -16,6 +17,46 @@ import type { ModManagerSettings } from '../src/shared/mod-manager-contracts'
 import { SoftwareCatalogService } from './builtins/software-catalog/service'
 import { ManualLibraryService } from './builtins/manual-library/service'
 import { UPDATE_DOWNLOAD_URL } from '../src/shared/app-meta'
+
+function isRunningAsAdmin(): boolean {
+  try {
+    execFileSync('net', ['session'], { stdio: 'ignore', windowsHide: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
+const RAN_AS_ADMIN_FLAG = '--dcshub-ran-as-admin'
+if (process.platform === 'win32' && !process.argv.includes(RAN_AS_ADMIN_FLAG)) {
+  if (!isRunningAsAdmin()) {
+    try {
+      const args = [...process.argv.slice(1), RAN_AS_ADMIN_FLAG]
+      const escapedArgs = args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(',')
+      const psCmd = `Start-Process -FilePath "${process.execPath}" -ArgumentList ${escapedArgs} -Verb RunAs`
+      spawn('powershell', ['-NoProfile', '-Command', psCmd], {
+        detached: true, stdio: 'ignore', shell: false, windowsHide: true,
+      }).unref()
+      app.quit()
+    } catch { /* fall through */ }
+  }
+}
+
+interface OverlaySettings {
+  hotkey: string
+  opacity: number
+  width: number
+  height: number
+  enabled: boolean
+}
+
+const DEFAULT_OVERLAY_SETTINGS: OverlaySettings = {
+  hotkey: 'F9',
+  opacity: 0.92,
+  width: 680,
+  height: 780,
+  enabled: true,
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RESET_USER_DATA_ARG = '--dcshub-reset-user-data'
@@ -45,13 +86,452 @@ process.env.VITE_PUBLIC = process.env.VITE_DEV_SERVER_URL
   : process.env.DIST
 
 let win: BrowserWindow | null = null
+let overlayWin: BrowserWindow | null = null
 let modManager: ModManagerService | null = null
 let dcsLaunch: DcsLaunchService | null = null
 let softwareCatalog: SoftwareCatalogService | null = null
 let manualLibrary: ManualLibraryService | null = null
+let overlaySettings: OverlaySettings = { ...DEFAULT_OVERLAY_SETTINGS }
+let overlayUserVisible = false
+let dcsProcessRunning = false
+let dcsCheckTimer: ReturnType<typeof setInterval> | null = null
 const manualViewerWindows = new Set<BrowserWindow>()
 const moduleManager = new ModuleManager()
 let quitCleanupStarted = false
+
+function getOverlaySettingsPath(): string {
+  return path.join(app.getPath('userData'), 'overlay-settings.json')
+}
+
+function loadOverlaySettings(): void {
+  try {
+    const raw = fs.readFileSync(getOverlaySettingsPath(), 'utf8')
+    const parsed = JSON.parse(raw) as Partial<OverlaySettings>
+    overlaySettings = {
+      hotkey: typeof parsed.hotkey === 'string' && parsed.hotkey ? parsed.hotkey : DEFAULT_OVERLAY_SETTINGS.hotkey,
+      opacity: typeof parsed.opacity === 'number' && parsed.opacity >= 0.3 && parsed.opacity <= 1 ? parsed.opacity : DEFAULT_OVERLAY_SETTINGS.opacity,
+      width: typeof parsed.width === 'number' && parsed.width >= 400 && parsed.width <= 2000 ? parsed.width : DEFAULT_OVERLAY_SETTINGS.width,
+      height: typeof parsed.height === 'number' && parsed.height >= 300 && parsed.height <= 1600 ? parsed.height : DEFAULT_OVERLAY_SETTINGS.height,
+      enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULT_OVERLAY_SETTINGS.enabled,
+    }
+  } catch {
+    overlaySettings = { ...DEFAULT_OVERLAY_SETTINGS }
+  }
+}
+
+function saveOverlaySettings(): void {
+  try {
+    fs.writeFileSync(getOverlaySettingsPath(), JSON.stringify(overlaySettings, null, 2), 'utf8')
+  } catch { /* ignore */ }
+}
+
+interface ParsedHotkey { vkCode: number; mods: number }
+
+function parseElectronAccelerator(accelerator: string): ParsedHotkey | null {
+  const parts = accelerator.split('+').map((p) => p.trim().toLowerCase())
+  let mods = 0
+  let key = ''
+  for (const p of parts) {
+    if (!p) continue
+    if (p === 'ctrl' || p === 'control' || p === 'cmd' || p === 'command' || p === 'super') mods |= 0x02
+    else if (p === 'shift') mods |= 0x04
+    else if (p === 'alt' || p === 'option') mods |= 0x01
+    else if (p === 'meta' || p === 'win' || p === 'windows') mods |= 0x08
+    else key = p
+  }
+  if (!key) return null
+  let vkCode = 0
+  if (/^f([1-9]|1[0-9]|2[0-4])$/.test(key)) vkCode = 0x6F + parseInt(key.slice(1), 10)
+  else if (/^[a-z]$/.test(key)) vkCode = key.toUpperCase().charCodeAt(0)
+  else if (/^[0-9]$/.test(key)) vkCode = 0x30 + parseInt(key, 10)
+  else if (key === 'escape' || key === 'esc') vkCode = 0x1B
+  else if (key === 'tab') vkCode = 0x09
+  else if (key === 'space' || key === 'spacebar') vkCode = 0x20
+  else if (key === 'enter' || key === 'return') vkCode = 0x0D
+  else if (key === 'backspace') vkCode = 0x08
+  else return null
+  return { vkCode, mods }
+}
+
+function isDcsProcessRunning(): boolean {
+  try {
+    const result = execFileSync('powershell', [
+      '-NoProfile', '-Command',
+      'Get-Process | Where-Object { $_.ProcessName -like "DCS*" -or $_.ProcessName -like "Digital Combat Simulator*" } | Select-Object -First 1 Id'
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 2000 }).trim()
+    return result.length > 0
+  } catch {
+    return false
+  }
+}
+
+let lastOverlayToggleAt = 0
+function toggleOverlay(): void {
+  if (!overlaySettings.enabled) return
+  const now = Date.now()
+  if (now - lastOverlayToggleAt < 150) return
+  lastOverlayToggleAt = now
+  if (overlayUserVisible) {
+    hideOverlay()
+  } else {
+    if (!dcsProcessRunning && !isDcsProcessRunning()) {
+      dcsProcessRunning = false
+      return
+    }
+    dcsProcessRunning = true
+    showOverlay()
+  }
+}
+
+function showOverlay(): void {
+  ensureOverlayWindow()
+  if (!overlayWin || overlayWin.isDestroyed()) return
+  overlayUserVisible = true
+  overlayWin.setAlwaysOnTop(true, 'screen-saver')
+  overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  overlayWin.setIgnoreMouseEvents(false)
+  overlayWin.show()
+  overlayWin.focus()
+  overlayWin.webContents.focus()
+  overlayWin.webContents.send('overlay:focus-input')
+}
+
+function hideOverlay(): void {
+  overlayUserVisible = false
+  if (overlayWin && !overlayWin.isDestroyed()) {
+    overlayWin.setIgnoreMouseEvents(true, { forward: true })
+    overlayWin.hide()
+  }
+}
+
+function startDcsProcessMonitor(): void {
+  if (dcsCheckTimer) return
+  dcsProcessRunning = isDcsProcessRunning()
+  dcsCheckTimer = setInterval(() => {
+    const running = isDcsProcessRunning()
+    if (running !== dcsProcessRunning) {
+      dcsProcessRunning = running
+      if (!running && overlayUserVisible) {
+        hideOverlay()
+      }
+    }
+  }, 3000)
+}
+
+function stopDcsProcessMonitor(): void {
+  if (dcsCheckTimer) {
+    clearInterval(dcsCheckTimer)
+    dcsCheckTimer = null
+  }
+}
+
+let hotkeyHookProcess: ChildProcess | null = null
+
+const KBD_HOOK_CSHARP = `
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Diagnostics;
+
+public static class DcsHubKbdHook {
+  private const int WH_KEYBOARD_LL = 13;
+  private const int WM_KEYDOWN = 0x0100;
+  private const int WM_SYSKEYDOWN = 0x0104;
+  private const int WM_KEYUP = 0x0101;
+  private const int WM_SYSKEYUP = 0x0105;
+  private const int WM_QUIT = 0x0012;
+  private const int VK_LSHIFT = 0xA0;
+  private const int VK_RSHIFT = 0xA1;
+  private const int VK_LCONTROL = 0xA2;
+  private const int VK_RCONTROL = 0xA3;
+  private const int VK_LMENU = 0xA4;
+  private const int VK_RMENU = 0xA5;
+  private const int VK_LWIN = 0x5B;
+  private const int VK_RWIN = 0x5C;
+  private const int MOD_ALT = 0x01;
+  private const int MOD_CTRL = 0x02;
+  private const int MOD_SHIFT = 0x04;
+  private const int MOD_WIN = 0x08;
+  private const int MOD_MASK = 0x0F;
+
+  private static IntPtr _hookId = IntPtr.Zero;
+  private static HookProc _proc;
+  private static int _targetVk;
+  private static int _targetMods;
+  private static int _currentMods;
+  private static bool _suppressNextKeyUp;
+  private static int _parentPid;
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct MSG {
+    public IntPtr hwnd;
+    public uint message;
+    public IntPtr wParam;
+    public IntPtr lParam;
+    public uint time;
+    public int pt_x;
+    public int pt_y;
+  }
+
+  public delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+  [DllImport("user32.dll", SetLastError=true)]
+  private static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
+  [DllImport("user32.dll", SetLastError=true)]
+  private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+  [DllImport("user32.dll")]
+  private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+  [DllImport("user32.dll")]
+  private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+  [DllImport("user32.dll")]
+  private static extern bool TranslateMessage([In] ref MSG lpMsg);
+  [DllImport("user32.dll")]
+  private static extern IntPtr DispatchMessage([In] ref MSG lpMsg);
+  [DllImport("user32.dll")]
+  private static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);
+  [DllImport("kernel32.dll")]
+  private static extern uint GetCurrentThreadId();
+
+  private static void UpdateMod(int vkCode, bool isDown) {
+    int mod = 0;
+    if (vkCode == VK_LSHIFT || vkCode == VK_RSHIFT) mod = MOD_SHIFT;
+    else if (vkCode == VK_LCONTROL || vkCode == VK_RCONTROL) mod = MOD_CTRL;
+    else if (vkCode == VK_LMENU || vkCode == VK_RMENU) mod = MOD_ALT;
+    else if (vkCode == VK_LWIN || vkCode == VK_RWIN) mod = MOD_WIN;
+    if (mod == 0) return;
+    if (isDown) _currentMods |= mod;
+    else _currentMods &= ~mod;
+  }
+
+  private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+    if (nCode >= 0) {
+      int vkCode = Marshal.ReadInt32(lParam);
+      int msg = wParam.ToInt32();
+      bool isDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
+      bool isUp = (msg == WM_KEYUP || msg == WM_SYSKEYUP);
+
+      UpdateMod(vkCode, isDown);
+
+      if (isDown && vkCode == _targetVk) {
+        if ((_currentMods & MOD_MASK) == _targetMods) {
+          _suppressNextKeyUp = true;
+          Console.Out.WriteLine("TRIGGER");
+          Console.Out.Flush();
+          return (IntPtr)1;
+        }
+      }
+      if (isUp && vkCode == _targetVk && _suppressNextKeyUp) {
+        _suppressNextKeyUp = false;
+        return (IntPtr)1;
+      }
+    }
+    return CallNextHookEx(_hookId, nCode, wParam, lParam);
+  }
+
+  private static bool IsParentAlive() {
+    if (_parentPid <= 0) return true;
+    try {
+      Process p = Process.GetProcessById(_parentPid);
+      if (p.HasExited) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  public static void Start(string[] args) {
+    if (args.Length < 2) return;
+    _targetVk = int.Parse(args[0]);
+    _targetMods = int.Parse(args[1]);
+    _parentPid = args.Length >= 3 ? int.Parse(args[2]) : 0;
+    _currentMods = 0;
+    _suppressNextKeyUp = false;
+    _proc = HookCallback;
+    _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, IntPtr.Zero, 0);
+    if (_hookId == IntPtr.Zero) {
+      Console.Out.WriteLine("HOOK_FAILED");
+      Console.Out.Flush();
+      return;
+    }
+    Console.Out.WriteLine("HOOK_READY");
+    Console.Out.Flush();
+
+    uint threadId = GetCurrentThreadId();
+
+    Thread stdinMonitor = new Thread(() => {
+      try { Console.In.ReadLine(); } catch { }
+      try { PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero); } catch { }
+    });
+    stdinMonitor.IsBackground = true;
+    stdinMonitor.Start();
+
+    Thread parentMonitor = new Thread(() => {
+      while (true) {
+        Thread.Sleep(1000);
+        if (!IsParentAlive()) {
+          try { PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero); } catch { }
+          return;
+        }
+      }
+    });
+    parentMonitor.IsBackground = true;
+    parentMonitor.Start();
+
+    MSG msg;
+    while (GetMessage(out msg, IntPtr.Zero, 0, 0) > 0) {
+      TranslateMessage(ref msg);
+      DispatchMessage(ref msg);
+    }
+    try { UnhookWindowsHookEx(_hookId); } catch { }
+  }
+}
+`
+
+function startKeyboardHook(hotkey: string): void {
+  stopKeyboardHook()
+  if (process.platform !== 'win32') {
+    registerGlobalShortcut(hotkey)
+    return
+  }
+  const parsed = parseElectronAccelerator(hotkey)
+  if (!parsed) {
+    registerGlobalShortcut(DEFAULT_OVERLAY_SETTINGS.hotkey)
+    return
+  }
+
+  registerGlobalShortcut(hotkey)
+
+  const psScript = `
+Add-Type -TypeDefinition @'
+${KBD_HOOK_CSHARP}
+'@
+[DcsHubKbdHook]::Start(@('${parsed.vkCode}','${parsed.mods}','${process.pid}'))
+`
+  try {
+    hotkeyHookProcess = spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-STA',
+      '-ExecutionPolicy', 'Bypass', '-Command', psScript,
+    ], {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+      detached: false,
+    })
+    const proc = hotkeyHookProcess
+    let stdoutBuf = ''
+    proc.stdout?.on('data', (chunk: Buffer | string) => {
+      stdoutBuf += chunk.toString('utf8')
+      const lines = stdoutBuf.split(/\r?\n/)
+      stdoutBuf = lines.pop() ?? ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (trimmed === 'TRIGGER') {
+          toggleOverlay()
+        }
+      }
+    })
+    proc.on('exit', () => {
+      if (hotkeyHookProcess === proc) {
+        hotkeyHookProcess = null
+      }
+    })
+    proc.on('error', () => {
+      if (hotkeyHookProcess === proc) {
+        hotkeyHookProcess = null
+      }
+    })
+  } catch {
+    // ignore - globalShortcut still registered as fallback
+  }
+}
+
+function stopKeyboardHook(): void {
+  globalShortcut.unregisterAll()
+  if (hotkeyHookProcess) {
+    const proc = hotkeyHookProcess
+    hotkeyHookProcess = null
+    const pid = proc.pid
+    try { proc.stdin?.end() } catch { /* ignore */ }
+    try { proc.stdout?.destroy() } catch { /* ignore */ }
+    try { proc.stderr?.destroy() } catch { /* ignore */ }
+    try { proc.kill('SIGTERM') } catch { /* ignore */ }
+    if (pid) {
+      try {
+        require('child_process').execSync(`taskkill /PID ${pid} /T /F`, { windowsHide: true, stdio: 'ignore', timeout: 2000 })
+      } catch { /* ignore */ }
+    }
+  }
+}
+
+function registerGlobalShortcut(hotkey: string): void {
+  globalShortcut.unregisterAll()
+  try {
+    globalShortcut.register(hotkey, toggleOverlay)
+  } catch {
+    try {
+      globalShortcut.register(DEFAULT_OVERLAY_SETTINGS.hotkey, toggleOverlay)
+      overlaySettings.hotkey = DEFAULT_OVERLAY_SETTINGS.hotkey
+      saveOverlaySettings()
+    } catch { /* ignore */ }
+  }
+}
+
+function registerOverlayHotkey(): void {
+  startKeyboardHook(overlaySettings.hotkey)
+}
+
+function ensureOverlayWindow(): void {
+  if (overlayWin && !overlayWin.isDestroyed()) return
+  const preloadPath = path.join(__dirname, 'preload.cjs')
+  const primaryDisplay = screen.getPrimaryDisplay()
+  const { width: screenWidth, height: screenHeight } = primaryDisplay.bounds
+
+  overlayWin = new BrowserWindow({
+    title: '超级手册',
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: true,
+    focusable: true,
+    width: screenWidth,
+    height: screenHeight,
+    x: 0,
+    y: 0,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    webPreferences: {
+      preload: preloadPath,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      offscreen: false,
+    },
+  })
+
+  overlayWin.setOpacity(overlaySettings.opacity)
+  overlayWin.setIgnoreMouseEvents(true, { forward: true })
+
+  const overlayUrl = process.env.VITE_DEV_SERVER_URL
+    ? `${process.env.VITE_DEV_SERVER_URL}?overlay=1`
+    : `file://${path.join(process.env.DIST || '', 'index.html')}?overlay=1`
+
+  overlayWin.loadURL(overlayUrl)
+
+  overlayWin.webContents.on('did-finish-load', () => {
+    overlayWin?.setOpacity(overlaySettings.opacity)
+  })
+
+  overlayWin.on('closed', () => {
+    overlayWin = null
+    overlayUserVisible = false
+  })
+}
 
 function restoreMainWindow(): void {
   if (!win || win.isDestroyed()) createWindow()
@@ -167,6 +647,10 @@ function registerWindowIpc(): void {
     try { modManager?.dispose?.() } catch {}
     for (const viewer of [...manualViewerWindows]) { try { viewer.destroy() } catch {} }
     manualViewerWindows.clear()
+    try { overlayWin?.destroy() } catch {}
+    overlayWin = null
+    stopKeyboardHook()
+    globalShortcut.unregisterAll()
     try { win?.close() } catch {}
     try { await session.defaultSession.clearCache() } catch {}
     try { await session.defaultSession.clearStorageData({ storages: ['cookies', 'filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers', 'cachestorage'] }) } catch {}
@@ -175,6 +659,41 @@ function registerWindowIpc(): void {
     setTimeout(() => app.exit(0), 200)
   })
   ipcMain.on('window:quit', () => app.quit())
+  ipcMain.on('overlay:hide', () => hideOverlay())
+  ipcMain.handle('overlay:is-active', () => overlayUserVisible)
+  ipcMain.handle('overlay:get-settings', () => overlaySettings)
+  ipcMain.handle('overlay:set-hotkey', (_event, hotkey: unknown) => {
+    if (typeof hotkey !== 'string' || !hotkey.trim()) throw new Error('Invalid hotkey')
+    const newHotkey = hotkey.trim()
+    const parsed = parseElectronAccelerator(newHotkey)
+    if (!parsed) throw new Error('不支持的热键组合')
+    overlaySettings.hotkey = newHotkey
+    saveOverlaySettings()
+    startKeyboardHook(newHotkey)
+    return overlaySettings
+  })
+  ipcMain.handle('overlay:set-opacity', (_event, opacity: unknown) => {
+    if (typeof opacity !== 'number' || opacity < 0.3 || opacity > 1) throw new Error('Invalid opacity')
+    overlaySettings.opacity = opacity
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.setOpacity(opacity)
+    saveOverlaySettings()
+    return overlaySettings
+  })
+  ipcMain.handle('overlay:set-size', (_event, width: unknown, height: unknown) => {
+    if (typeof width !== 'number' || width < 400 || width > 2000) throw new Error('Invalid width')
+    if (typeof height !== 'number' || height < 300 || height > 1600) throw new Error('Invalid height')
+    overlaySettings.width = Math.round(width)
+    overlaySettings.height = Math.round(height)
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.setSize(overlaySettings.width, overlaySettings.height)
+    saveOverlaySettings()
+    return overlaySettings
+  })
+  ipcMain.handle('overlay:set-enabled', (_event, enabled: unknown) => {
+    overlaySettings.enabled = !!enabled
+    if (!overlaySettings.enabled && overlayUserVisible) hideOverlay()
+    saveOverlaySettings()
+    return overlaySettings
+  })
 }
 
 function registerModuleIpc(): void {
@@ -430,6 +949,9 @@ function registerManualLibraryIpc(): void {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  loadOverlaySettings()
+  registerOverlayHotkey()
+  startDcsProcessMonitor()
   modManager = new ModManagerService(app.getPath('userData'))
   dcsLaunch = new DcsLaunchService(app.getPath('userData'))
   manualLibrary = new ManualLibraryService(
@@ -467,6 +989,11 @@ app.on('before-quit', (event) => {
   if (quitCleanupStarted) return
   event.preventDefault()
   quitCleanupStarted = true
+  stopDcsProcessMonitor()
+  stopKeyboardHook()
+  globalShortcut.unregisterAll()
+  try { overlayWin?.destroy() } catch {}
+  overlayWin = null
   void moduleManager.dispose().finally(() => app.quit())
 })
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })

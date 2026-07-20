@@ -13,6 +13,9 @@ dist/
 dist-ssr/
 dist-electron/
 release/
+build-out/
+build-out2/
+build-out3/
 *.tsbuildinfo
 *.local
 

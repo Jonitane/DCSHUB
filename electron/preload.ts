@@ -2,7 +2,7 @@ import type { ModuleBridge, ModuleChangedEvent, ModuleId, ModuleLogEntry, Module
 import type { ModManagerBridge, ModManagerSettings } from '../src/shared/mod-manager-contracts'
 import type { DcsBridge } from '../src/shared/dcs-contracts'
 import type { SoftwareCatalogBridge } from '../src/shared/software-catalog-contracts'
-import type { WindowControlsBridge } from '../src/shared/window-contracts'
+import type { WindowControlsBridge, OverlayBridge } from '../src/shared/window-contracts'
 import type { ManualLibraryBridge, ManualLibraryProgress } from '../src/shared/manual-library-contracts'
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron') as typeof import('electron')
@@ -115,6 +115,20 @@ const windowControls: WindowControlsBridge = {
   resetAllUserData: () => ipcRenderer.invoke('window:reset-all-user-data'),
 }
 
-contextBridge.exposeInMainWorld('electronAPI', { modules, modManager, dcs, softwareCatalog, manualLibrary, windowControls })
+const overlay: OverlayBridge = {
+  hide: () => ipcRenderer.send('overlay:hide'),
+  getSettings: () => ipcRenderer.invoke('overlay:get-settings'),
+  setHotkey: (hotkey: string) => ipcRenderer.invoke('overlay:set-hotkey', hotkey),
+  setOpacity: (opacity: number) => ipcRenderer.invoke('overlay:set-opacity', opacity),
+  setSize: (width: number, height: number) => ipcRenderer.invoke('overlay:set-size', width, height),
+  setEnabled: (enabled: boolean) => ipcRenderer.invoke('overlay:set-enabled', enabled),
+  onFocusInput: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('overlay:focus-input', handler)
+    return () => ipcRenderer.removeListener('overlay:focus-input', handler)
+  },
+}
+
+contextBridge.exposeInMainWorld('electronAPI', { modules, modManager, dcs, softwareCatalog, manualLibrary, windowControls, overlay })
 
 export {}
