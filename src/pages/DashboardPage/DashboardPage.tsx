@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
-import { Activity, Bookmark, ChevronDown, ChevronUp, ExternalLink, Glasses, Monitor, Play, RefreshCw, Settings2, SlidersHorizontal, Square } from 'lucide-react'
+import { Activity, Bookmark, ChevronDown, ChevronUp, ExternalLink, Glasses, Monitor, Play, RefreshCw, Settings2, SlidersHorizontal, Sparkles, Square } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -261,71 +261,80 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="relative isolate -m-3 min-h-full space-y-8 overflow-hidden rounded-2xl p-3">
-      <div aria-hidden className="absolute inset-x-0 top-0 -z-20 h-[calc(100vh-3.5rem)] scale-[1.01] bg-cover bg-center bg-no-repeat opacity-45 blur-[1.5px]" style={{ backgroundImage: `url(${resolveAssetUrl('/images/dashboard-f15e.webp')})` }} />
-      <div aria-hidden className="absolute inset-x-0 top-0 -z-10 h-[calc(100vh-3.5rem)] bg-gradient-to-b from-background/35 via-background/68 to-background" />
+    <div className="relative isolate -m-3 min-h-full space-y-5 overflow-hidden rounded-2xl p-3">
+      <div aria-hidden className="absolute inset-x-0 top-0 -z-10 h-[calc(100vh-3.5rem)] bg-cover bg-center bg-no-repeat opacity-20" style={{ backgroundImage: `url(${resolveAssetUrl('/images/dashboard-f15e.webp')})` }} />
+      <div aria-hidden className="absolute inset-x-0 top-0 -z-10 h-[calc(100vh-3.5rem)] bg-gradient-to-b from-background/40 via-background/75 to-background" />
       <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-4">
-        <div aria-hidden className="h-[44px] shrink-0" />
-        <div className="w-full space-y-4">
-          <div className="flex w-full flex-wrap items-start gap-2">
-            <div className="flex items-center gap-2 rounded-xl border border-primary/35 bg-card/95 p-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.28)]">
-              <div className="flex min-w-32 items-center gap-1.5 px-2 text-sm font-semibold text-primary"><SlidersHorizontal className="size-4" />软件预设</div>
+        <div aria-hidden className="h-[28px] shrink-0" />
+        <div className="w-full space-y-3">
+          <button
+            type="button"
+            onClick={() => navigate('/manual-library?focus=1')}
+            className="group inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-gradient-to-r from-primary/15 via-primary/10 to-primary/5 px-4 py-2 text-sm font-medium text-primary shadow-sm transition-all hover:border-primary/50 hover:from-primary/20 hover:shadow-md"
+          >
+            <Sparkles className="size-4" />
+            超级手册
+            <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-bold text-primary">AI</span>
+          </button>
+          <div className="flex w-full flex-wrap items-center gap-2.5">
+            <div className="flex items-center gap-2.5 rounded-xl border border-border/70 bg-card/90 p-1.5 shadow-sm">
+              <div className="flex items-center gap-1.5 px-2.5 text-sm font-medium text-foreground"><SlidersHorizontal className="size-4 text-primary" />软件预设</div>
               <Select value={selectedProfile.id} onValueChange={(id) => {
                 const next = { ...appSettings, selectedStartupProfileId: id }
                 setAppSettings(next)
                 saveAppSettings(next)
               }}>
-                <SelectTrigger aria-label="选择软件预设" className="w-48 border-primary/25 bg-background"><SelectValue>{selectedProfile.name}</SelectValue></SelectTrigger>
+                <SelectTrigger aria-label="选择软件预设" className="h-9 w-48 rounded-lg border-border/70 bg-background text-sm"><SelectValue>{selectedProfile.name}</SelectValue></SelectTrigger>
                 <SelectContent>{appSettings.startupProfiles.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="ml-auto flex flex-col items-end gap-1.5">
-              <div className="flex items-center gap-1.5">
-                <div className="flex items-center gap-1 rounded-lg border border-border/55 bg-background/75 p-1 text-[10px] font-semibold shadow-inner">
-                  <span className={`flex items-center gap-1 rounded-md border px-2 py-1 transition-all duration-200 ${appSettings.dcsLaunchMode === 'desktop' ? 'border-cyan-300/65 bg-cyan-400/20 text-cyan-200 shadow-[0_0_12px_rgba(34,211,238,0.38)]' : 'border-transparent text-muted-foreground/55'}`}><Monitor className="size-3" />桌面</span>
-                  <Switch className={appSettings.dcsLaunchMode === 'vr' ? '!bg-violet-500 shadow-[0_0_12px_rgba(139,92,246,0.7)]' : '!bg-cyan-500 shadow-[0_0_12px_rgba(6,182,212,0.7)]'} aria-label="DCS 启动模式" checked={appSettings.dcsLaunchMode === 'vr'} onCheckedChange={(checked) => { const next = { ...appSettings, dcsLaunchMode: checked ? 'vr' as const : 'desktop' as const }; setAppSettings(next); saveAppSettings(next) }} />
-                  <span className={`flex items-center gap-1 rounded-md border px-2 py-1 transition-all duration-200 ${appSettings.dcsLaunchMode === 'vr' ? 'border-violet-300/65 bg-violet-400/20 text-violet-200 shadow-[0_0_12px_rgba(167,139,250,0.42)]' : 'border-transparent text-muted-foreground/55'}`}><Glasses className="size-3" />VR</span>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-0.5 rounded-xl border border-border/70 bg-card/90 p-1 text-xs font-medium shadow-sm">
+                  <span className={`flex items-center gap-1 rounded-lg px-2.5 py-1 transition-colors ${appSettings.dcsLaunchMode === 'desktop' ? 'bg-secondary text-foreground' : 'text-muted-foreground'}`}><Monitor className="size-3.5" />桌面</span>
+                  <Switch aria-label="DCS 启动模式" checked={appSettings.dcsLaunchMode === 'vr'} onCheckedChange={(checked) => { const next = { ...appSettings, dcsLaunchMode: checked ? 'vr' as const : 'desktop' as const }; setAppSettings(next); saveAppSettings(next) }} />
+                  <span className={`flex items-center gap-1 rounded-lg px-2.5 py-1 transition-colors ${appSettings.dcsLaunchMode === 'vr' ? 'bg-secondary text-foreground' : 'text-muted-foreground'}`}><Glasses className="size-3.5" />VR</span>
                 </div>
-                <Button variant="outline" className="h-8 gap-1.5 border-amber-400/40 bg-amber-400/10 px-2.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-400/20 hover:text-amber-100" onClick={() => void openDcsLauncher()} disabled={launchingDcsLauncher}>
-                  {launchingDcsLauncher ? <Activity className="size-3 animate-spin" /> : <ExternalLink className="size-3" />}启动器
+                <Button variant="outline" size="sm" className="h-9 gap-1.5 rounded-xl px-3 text-sm" onClick={() => void openDcsLauncher()} disabled={launchingDcsLauncher}>
+                  {launchingDcsLauncher ? <Activity className="size-3.5 animate-spin" /> : <ExternalLink className="size-3.5" />}启动器
                 </Button>
               </div>
               <div className="flex items-center gap-2">
-                <Button onClick={() => void runAll('start')} disabled={loading || batchOperation !== null || operatingModuleId !== null} className="h-11 gap-2 border border-emerald-300/35 bg-emerald-500 px-4 font-semibold text-emerald-950 shadow-[0_0_20px_rgba(16,185,129,0.28)] hover:bg-emerald-400">
+                <Button onClick={() => void runAll('start')} disabled={loading || batchOperation !== null || operatingModuleId !== null} className="h-10 gap-2 rounded-xl bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-md hover:bg-primary/90">
                   {batchOperation === 'start' ? <Activity className="size-4 animate-spin" /> : <Play className="size-4" />}一键启动
                 </Button>
-                <Button onClick={() => void runAll('stop')} disabled={loading || runningCount === 0 || batchOperation !== null || operatingModuleId !== null} className="h-11 gap-2 border border-red-300/35 bg-red-500 px-4 font-semibold text-white shadow-[0_0_20px_rgba(239,68,68,0.28)] hover:bg-red-400">
+                <Button onClick={() => void runAll('stop')} disabled={loading || runningCount === 0 || batchOperation !== null || operatingModuleId !== null} variant="destructive" className="h-10 gap-2 rounded-xl px-5 text-sm font-semibold shadow-md">
                   {batchOperation === 'stop' ? <Activity className="size-4 animate-spin" /> : <Square className="size-4" />}一键停止
                 </Button>
               </div>
             </div>
           </div>
-          <div className="w-fit space-y-1.5">
-            <div className="flex items-center gap-2 rounded-xl border border-violet-400/30 bg-card/95 p-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.28)]">
-              <div className="flex min-w-32 items-center gap-1.5 px-2 text-sm font-semibold text-violet-300"><Bookmark className="size-4" />模组预设</div>
+          <div className="w-fit">
+            <div className="flex items-center gap-2.5 rounded-xl border border-border/70 bg-card/90 p-1.5 shadow-sm">
+              <div className="flex items-center gap-1.5 px-2.5 text-sm font-medium text-foreground"><Bookmark className="size-4 text-primary" />模组预设</div>
               <Select value={selectedModPresetId} onValueChange={setSelectedModPresetId}>
-                <SelectTrigger aria-label="选择模组预设" className="w-48 border-violet-400/25 bg-background" disabled={!modOverview?.configured || applyingModPreset}><SelectValue>{selectedModPreset?.name || '尚未配置'}</SelectValue></SelectTrigger>
+                <SelectTrigger aria-label="选择模组预设" className="h-9 w-48 rounded-lg border-border/70 bg-background text-sm" disabled={!modOverview?.configured || applyingModPreset}><SelectValue>{selectedModPreset?.name || '尚未配置'}</SelectValue></SelectTrigger>
                 <SelectContent>{modOverview?.presets.map((preset) => <SelectItem key={preset.id} value={preset.id}>{preset.name}</SelectItem>)}</SelectContent>
               </Select>
-            </div>
-            <div className="flex justify-end gap-1.5">
-              <Button className="h-6 gap-1 rounded-md border border-violet-300/30 bg-violet-500 px-2 text-[10px] font-semibold text-white hover:bg-violet-400" onClick={() => void applyModPreset(selectedModPresetId)} disabled={!modOverview?.configured || !selectedModPresetId || applyingModPreset || operatingModKey !== null}><Play className="size-3" />应用预设</Button>
-              <Button variant="outline" className="h-6 gap-1 rounded-md border-red-400/35 px-2 text-[10px] text-red-300 hover:bg-red-500/10 hover:text-red-200" onClick={() => void disableAllMods()} disabled={!modOverview?.configured || !modOverview.totalEnabledCount || applyingModPreset || operatingModKey !== null}><Square className="size-3" />关闭所有</Button>
+              <div className="ml-1 flex items-center gap-1">
+                <Button size="sm" className="h-8 gap-1 rounded-lg px-3 text-xs" onClick={() => void applyModPreset(selectedModPresetId)} disabled={!modOverview?.configured || !selectedModPresetId || applyingModPreset || operatingModKey !== null}><Play className="size-3" />应用预设</Button>
+                <Button size="sm" variant="outline" className="h-8 gap-1 rounded-lg px-3 text-xs" onClick={() => void disableAllMods()} disabled={!modOverview?.configured || !modOverview.totalEnabledCount || applyingModPreset || operatingModKey !== null}><Square className="size-3" />关闭所有</Button>
+              </div>
             </div>
           </div>
         </div>
       </motion.div>
 
-      <Card className="border-border/55 bg-card/90 shadow-[0_18px_45px_rgba(0,0,0,0.26)] backdrop-blur-md">
+      <Card className="border-border/60 bg-card/80 shadow-md backdrop-blur-sm">
         <CardContent className="p-5">
           <div className="flex flex-wrap items-center gap-2.5">
             <p className="text-sm font-semibold">全局设置</p>
-            <Badge variant="outline" className="border-primary/35 bg-primary/5 text-primary">当前</Badge>
+            <Badge variant="outline" className="rounded-full border-primary/30 bg-primary/10 px-2 text-[10px] text-primary">当前</Badge>
           </div>
           <div className="mt-4 grid gap-5 lg:grid-cols-2">
             <div>
-              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground"><span>软件预设</span><Badge variant="outline" className="h-5 text-[10px]">{selectedProfile.name}</Badge><span>{profileIncludesAll ? 'ALL' : `${profileModules.length} 个软件`}</span></div>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground"><span>软件预设</span><Badge variant="outline" className="h-5 rounded-full text-[10px]">{selectedProfile.name}</Badge><span>{profileIncludesAll ? 'ALL' : `${profileModules.length} 个软件`}</span></div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
                 {profileModules.length > 0 ? profileModules.map((module) => {
                   const active = isRunningState(snapshots[module.id]?.runState)
                   const busy = operatingModuleId === module.id
@@ -339,19 +348,19 @@ export default function DashboardPage() {
                       disabled={operatingModuleId !== null || batchOperation !== null || snapshots[module.id]?.installState !== 'installed'}
                       onClick={() => void toggleModule(module.id, active)}
                       onContextMenu={(event) => void openModuleMenu(event, module.id)}
-                      className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${active ? 'border-emerald-500/35 bg-emerald-500/10 text-foreground shadow-[0_0_10px_rgba(16,185,129,0.08)] hover:bg-emerald-500/15' : 'border-border/55 bg-muted/50 text-muted-foreground hover:border-border hover:bg-muted/70 hover:text-foreground'}`}
+                      className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${active ? 'border-success/40 bg-success/10 text-foreground hover:bg-success/15' : 'border-border/60 bg-muted/50 text-muted-foreground hover:border-border hover:bg-muted/70 hover:text-foreground'}`}
                     >
-                      <span className={`size-1.5 shrink-0 rounded-full ${active ? 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.55)]' : 'bg-muted-foreground/35'}`} />
-                      {busy ? <Activity className="size-3.5 animate-spin" /> : module.brandLogo ? <Image src={module.brandLogo} alt="" className="size-3.5 object-contain" /> : null}
+                      <span className={`size-1.5 shrink-0 rounded-full ${active ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                      {busy ? <Activity className="size-3 animate-spin" /> : module.brandLogo ? <Image src={module.brandLogo} alt="" className="size-3.5 object-contain" /> : null}
                       <span>{module.displayName}</span>
                     </button>
                   )
                 }) : <span className="text-xs text-muted-foreground">当前配置尚未选择启动模块</span>}
               </div>
             </div>
-            <div className="border-t border-border/35 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground"><span>模组预设</span><Badge variant="outline" className="h-5 border-violet-400/30 text-[10px] text-violet-300">{selectedModPreset?.name || '未选择'}</Badge><span>{selectedModPreset?.entries.length || 0} 个模组</span></div>
-              <div className={`mt-3 flex flex-wrap gap-2 ${showAllPresetMods ? '' : 'max-h-[4.25rem] overflow-hidden'}`}>
+            <div className="border-t border-border/40 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground"><span>模组预设</span><Badge variant="outline" className="h-5 rounded-full text-[10px]">{selectedModPreset?.name || '未选择'}</Badge><span>{selectedModPreset?.entries.length || 0} 个模组</span></div>
+              <div className={`mt-3 flex flex-wrap gap-1.5 ${showAllPresetMods ? '' : 'max-h-[4.25rem] overflow-hidden'}`}>
                 {selectedModPreset?.entries.length ? selectedModPreset.entries.map((entry) => {
                   const key = `${entry.gameDirectoryId}:${entry.modId}`
                   const active = enabledModKeys.has(key)
@@ -364,23 +373,23 @@ export default function DashboardPage() {
                       title={active ? `停用 ${entry.modName}` : `启用 ${entry.modName}`}
                       disabled={operatingModKey !== null || applyingModPreset}
                       onClick={() => void togglePresetMod(entry, active)}
-                      className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${active ? 'border-emerald-500/35 bg-emerald-500/10 text-foreground shadow-[0_0_10px_rgba(16,185,129,0.08)] hover:bg-emerald-500/15' : 'border-border/55 bg-muted/50 text-muted-foreground hover:border-border hover:bg-muted/70 hover:text-foreground'}`}
+                      className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${active ? 'border-success/40 bg-success/10 text-foreground hover:bg-success/15' : 'border-border/60 bg-muted/50 text-muted-foreground hover:border-border hover:bg-muted/70 hover:text-foreground'}`}
                     >
-                      {busy ? <Activity className="size-3 animate-spin" /> : <span className={`size-1.5 rounded-full ${active ? 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.55)]' : 'bg-muted-foreground/35'}`} />}
+                      {busy ? <Activity className="size-3 animate-spin" /> : <span className={`size-1.5 rounded-full ${active ? 'bg-success' : 'bg-muted-foreground/40'}`} />}
                       {entry.modName}
                     </button>
                   )
                 }) : <span className="text-xs text-muted-foreground">当前模组预设没有包含模组</span>}
               </div>
-              {(selectedModPreset?.entries.length || 0) > 4 && <Button size="sm" variant="ghost" className="mt-2 h-7 px-2 text-xs text-violet-300" onClick={() => setShowAllPresetMods((current) => !current)}>{showAllPresetMods ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}{showAllPresetMods ? '收起' : '展开全部'}</Button>}
+              {(selectedModPreset?.entries.length || 0) > 4 && <Button size="sm" variant="ghost" className="mt-2 h-7 rounded-lg px-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowAllPresetMods((current) => !current)}>{showAllPresetMods ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}{showAllPresetMods ? '收起' : '展开全部'}</Button>}
             </div>
           </div>
-          <div className="mt-3 flex justify-end border-t border-border/25 pt-2">
+          <div className="mt-4 flex justify-end border-t border-border/30 pt-3">
             <button
               type="button"
               title="打开 DCSHUB 更新下载页面"
               onClick={() => void window.electronAPI?.windowControls.openUpdatePage()}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] text-muted-foreground/55 transition-colors hover:bg-muted/40 hover:text-muted-foreground"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-muted-foreground/70 transition-colors hover:bg-muted/50 hover:text-muted-foreground"
             >
               <RefreshCw className="size-3" />检查更新 · {APP_VERSION}
             </button>

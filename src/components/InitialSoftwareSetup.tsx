@@ -16,7 +16,7 @@ export default function InitialSoftwareSetup() {
   useEffect(() => {
     void window.electronAPI?.softwareCatalog.overview().then((overview) => {
       setCatalog(overview)
-      setSelected(new Set(overview.items.filter((item) => item.kind === 'builtin' && item.enabled).map((item) => item.id)))
+      setSelected(new Set(overview.items.filter((item) => item.kind === 'builtin').map((item) => item.id)))
     }).catch(() => undefined)
   }, [])
 

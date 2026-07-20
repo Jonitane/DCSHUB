@@ -118,6 +118,7 @@ export interface ChuckGuideCatalogItem {
 
 export interface ManualLibraryBridge {
   overview: () => Promise<ManualLibraryOverview>
+  currentProgress: () => Promise<ManualLibraryProgress | null>
   chooseLibraryDirectory: () => Promise<ManualLibraryOverview | null>
   chooseManualFiles: () => Promise<ManualOperationResult | null>
   importDroppedFiles: (files: ReadonlyArray<unknown>) => Promise<ManualOperationResult>
@@ -131,6 +132,7 @@ export interface ManualLibraryBridge {
   testDeepSeek: (apiKey?: string) => Promise<ManualOperationResult>
   chuckCatalog: () => Promise<ChuckGuideCatalogItem[]>
   downloadChuckGuide: (guideId: string) => Promise<ManualOperationResult>
+  downloadSelectedChuckGuides: (guideIds: string[]) => Promise<ManualOperationResult>
   downloadAllChuckGuides: () => Promise<ManualOperationResult>
   removeDuplicateDcsManuals: () => Promise<ManualOperationResult>
   completeOnboarding: () => Promise<ManualLibraryOverview>

@@ -80,6 +80,7 @@ const softwareCatalog: SoftwareCatalogBridge = {
 
 const manualLibrary: ManualLibraryBridge = {
   overview: () => ipcRenderer.invoke('manual-library:overview'),
+  currentProgress: () => ipcRenderer.invoke('manual-library:current-progress'),
   chooseLibraryDirectory: () => ipcRenderer.invoke('manual-library:choose-directory'),
   chooseManualFiles: () => ipcRenderer.invoke('manual-library:choose-files'),
   importDroppedFiles: (files: ReadonlyArray<unknown>) => ipcRenderer.invoke('manual-library:import-files', files.map((file) => webUtils.getPathForFile(file as never))),
@@ -93,6 +94,7 @@ const manualLibrary: ManualLibraryBridge = {
   testDeepSeek: (apiKey?: string) => ipcRenderer.invoke('manual-library:test-deepseek', apiKey),
   chuckCatalog: () => ipcRenderer.invoke('manual-library:chuck-catalog'),
   downloadChuckGuide: (guideId: string) => ipcRenderer.invoke('manual-library:download-chuck', guideId),
+  downloadSelectedChuckGuides: (guideIds: string[]) => ipcRenderer.invoke('manual-library:download-selected-chuck', guideIds),
   downloadAllChuckGuides: () => ipcRenderer.invoke('manual-library:download-all-chuck'),
   removeDuplicateDcsManuals: () => ipcRenderer.invoke('manual-library:remove-dcs-duplicates'),
   completeOnboarding: () => ipcRenderer.invoke('manual-library:complete-onboarding'),

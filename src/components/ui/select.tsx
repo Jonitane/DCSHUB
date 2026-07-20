@@ -71,7 +71,7 @@ export const SelectTrigger = React.forwardRef<HTMLButtonElement, SelectTriggerPr
         data-state={open ? 'open' : 'closed'}
         disabled={disabled}
         className={cn(
-          'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
+          'flex h-10 w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50',
           className,
         )}
         onClick={(event) => {
@@ -178,7 +178,7 @@ export function SelectContent({ children, className }: SelectContentProps) {
         role="listbox"
         tabIndex={-1}
         aria-activedescendant={undefined}
-        className={cn('fixed z-[9999] overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-xl outline-none', className)}
+        className={cn('fixed z-[9999] overflow-y-auto rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-xl outline-none', className)}
         style={{
           left: position?.left ?? 0,
           top: position?.top,
@@ -234,7 +234,7 @@ export function SelectItem({ value, disabled = false, children, className, onCli
       aria-selected={selected}
       aria-disabled={disabled}
       className={cn(
-        'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground',
+        'relative flex w-full cursor-default select-none items-center rounded-md py-1.5 pl-8 pr-2 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground',
         selected && 'bg-accent/50',
         disabled && 'pointer-events-none opacity-50',
         className,

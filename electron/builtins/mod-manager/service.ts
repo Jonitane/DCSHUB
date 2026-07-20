@@ -658,4 +658,6 @@ export class ModManagerService {
     fs.rmSync(this.statePath, { force: true })
     fs.renameSync(temporary, this.statePath)
   }
+
+  async dispose(): Promise<void> {}
 }

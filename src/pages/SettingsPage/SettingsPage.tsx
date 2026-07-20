@@ -158,7 +158,7 @@ export default function SettingsPage() {
 
       <Card className="overflow-hidden border-border/45 bg-card/75">
         <button type="button" className="flex w-full items-center gap-3.5 p-5 text-left transition-colors hover:bg-accent/15" onClick={() => setThemeOpen((current) => !current)} aria-expanded={themeOpen}>
-          <div className="flex size-10 items-center justify-center rounded-xl bg-amber-500/10 ring-1 ring-amber-500/20">{settings.theme === 'dark' ? <Moon className="size-5 text-amber-400" /> : <Sun className="size-5 text-amber-400" />}</div>
+          <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20">{settings.theme === 'dark' ? <Moon className="size-5 text-primary" /> : <Sun className="size-5 text-primary" />}</div>
           <div className="min-w-0 flex-1"><p className="text-sm font-semibold">主题</p><p className="mt-1 text-xs text-muted-foreground">深色与亮色界面</p></div>
           <span className="text-xs font-medium text-muted-foreground">{settings.theme === 'dark' ? '深色' : '亮色'}</span>
           <ChevronDown className={`size-4 text-muted-foreground transition-transform ${themeOpen ? 'rotate-180 text-primary' : ''}`} />
@@ -199,7 +199,7 @@ export default function SettingsPage() {
 
       <Card className="overflow-hidden border-border/45 bg-card/75">
         <button type="button" className="flex w-full items-center gap-3.5 p-5 text-left transition-colors hover:bg-accent/15" onClick={() => setSoftwareOpen((current) => !current)} aria-expanded={softwareOpen}>
-          <div className="flex size-10 items-center justify-center rounded-xl bg-cyan-500/10 ring-1 ring-cyan-400/20"><HardDrive className="size-5 text-cyan-400" /></div>
+          <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20"><HardDrive className="size-5 text-primary" /></div>
           <div className="min-w-0 flex-1"><p className="text-sm font-semibold">软件路径与管理</p><p className="mt-1 text-xs text-muted-foreground">识别路径、选择主程序并控制模块加载</p></div>
           <span className="text-xs text-muted-foreground">{enabledSoftwareCount}/{catalog?.items.length || 0} 已加载</span>
           <ChevronDown className={`size-4 text-muted-foreground transition-transform ${softwareOpen ? 'rotate-180 text-primary' : ''}`} />
@@ -208,7 +208,7 @@ export default function SettingsPage() {
         {softwareOpen && <CardContent className="space-y-4 border-t border-border/35 p-5">
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button variant="outline" size="sm" className="gap-2" onClick={() => void refreshSoftwarePaths()} disabled={catalogOperation !== null}>{catalogOperation === 'refresh' ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}刷新状态</Button>
-            <Button variant="outline" size="sm" className="gap-2 border-emerald-400/25 text-emerald-400" onClick={() => void detectAllBuiltinSoftware()} disabled={catalogOperation !== null}>{catalogOperation === 'detect-all' ? <LoaderCircle className="size-3.5 animate-spin" /> : <HardDrive className="size-3.5" />}自动识别全部</Button>
+            <Button variant="outline" size="sm" className="gap-2" onClick={() => void detectAllBuiltinSoftware()} disabled={catalogOperation !== null}>{catalogOperation === 'detect-all' ? <LoaderCircle className="size-3.5 animate-spin" /> : <HardDrive className="size-3.5" />}自动识别全部</Button>
             <Button size="sm" className="gap-2" onClick={() => void addSoftware()} disabled={catalogOperation !== null}>{catalogOperation === 'add' ? <LoaderCircle className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}添加软件</Button>
           </div>
 

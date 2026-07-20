@@ -64,8 +64,9 @@ export class SoftwareCatalogService {
     userDataDirectory: string,
     private readonly moduleManager: ModuleManager,
     builtinDefinitions: BuiltinSoftwareDefinition[],
-    private readonly packaged: boolean,
+    packaged: boolean,
   ) {
+    void packaged
     this.filePath = path.join(userDataDirectory, 'software-catalog.json')
     this.builtinIds = builtinDefinitions.map((definition) => definition.id)
     this.builtinDefinitions = new Map(builtinDefinitions.map((definition) => [definition.id, definition]))
@@ -99,7 +100,7 @@ export class SoftwareCatalogService {
       icon: manifest.brandLogo || null,
       installState: snapshots.get(manifest.id)?.installState || 'unknown',
     }))
-    return { items, needsInitialSetup: this.packaged && !this.data.setupCompleted }
+    return { items, needsInitialSetup: !this.data.setupCompleted }
   }
 
   async addExecutable(executablePath: string, iconDataUrl: string | null): Promise<SoftwareCatalogOverview> {
@@ -224,7 +225,7 @@ export class SoftwareCatalogService {
           : [],
       }
     } catch {
-      return { version: 2, setupCompleted: false, enabledBuiltinIds: [...this.builtinIds], builtinExecutableOverrides: {}, silentLaunchById: {}, customSoftware: [] }
+      return { version: 2, setupCompleted: false, enabledBuiltinIds: [], builtinExecutableOverrides: {}, silentLaunchById: {}, customSoftware: [] }
     }
   }
 
