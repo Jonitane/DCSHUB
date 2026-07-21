@@ -60,8 +60,8 @@ const DEFAULT_OVERLAY_SETTINGS: OverlaySettings = {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RESET_USER_DATA_ARG = '--dcshub-reset-user-data'
-const PRESERVE_DIRS_ON_RESET = new Set(['Cache', 'Code Cache', 'GPUCache', 'DawnCache', 'DawnWebGPUCache', 'Local Storage', 'Session Storage', 'Partitions', 'Network', 'blob_storage', 'Service Worker', 'webrtc_event_logs', 'extensions', 'Extension State', 'Extension Rules', 'IndexedDB', 'Shared Dictionary', 'Temp', 'Fonts', 'Default', 'Preferences', 'Last Version run.flag', 'lockfile'])
-const PRESERVE_FILES_ON_RESET = new Set(['Preferences', 'Local State', 'lockfile', 'SingletonLock', 'SingletonCookie', 'SingletonSocket'])
+const PRESERVE_DIRS_ON_RESET = new Set(['Crashpad', 'Temp', 'Fonts'])
+const PRESERVE_FILES_ON_RESET = new Set(['SingletonLock', 'SingletonCookie', 'SingletonSocket'])
 
 function resetAppDataIfRequested(): void {
   if (!process.argv.includes(RESET_USER_DATA_ARG)) return
@@ -641,6 +641,8 @@ function createWindow(): void {
 function registerWindowIpc(): void {
   ipcMain.handle('window:open-update-page', () => shell.openExternal(UPDATE_DOWNLOAD_URL))
   ipcMain.handle('window:reset-all-user-data', async () => {
+    // Prevent before-quit handler from racing with our cleanup
+    quitCleanupStarted = true
     try { moduleManager?.setMonitoringActive(false) } catch {}
     try { await moduleManager?.dispose() } catch {}
     try { dcsLaunch?.dispose?.() } catch {}
@@ -651,12 +653,14 @@ function registerWindowIpc(): void {
     overlayWin = null
     stopKeyboardHook()
     globalShortcut.unregisterAll()
-    try { win?.close() } catch {}
+    // Destroy instead of close to avoid triggering window-all-closed -> app.quit() race
+    try { win?.destroy() } catch {}
+    win = null
     try { await session.defaultSession.clearCache() } catch {}
     try { await session.defaultSession.clearStorageData({ storages: ['cookies', 'filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers', 'cachestorage'] }) } catch {}
     const relaunchArgs = process.argv.slice(1).filter((argument) => argument !== RESET_USER_DATA_ARG)
     app.relaunch({ args: [...relaunchArgs, RESET_USER_DATA_ARG] })
-    setTimeout(() => app.exit(0), 200)
+    app.exit(0)
   })
   ipcMain.on('window:quit', () => app.quit())
   ipcMain.on('overlay:hide', () => hideOverlay())
