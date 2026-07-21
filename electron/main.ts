@@ -18,30 +18,6 @@ import { SoftwareCatalogService } from './builtins/software-catalog/service'
 import { ManualLibraryService } from './builtins/manual-library/service'
 import { UPDATE_DOWNLOAD_URL } from '../src/shared/app-meta'
 
-function isRunningAsAdmin(): boolean {
-  try {
-    execFileSync('net', ['session'], { stdio: 'ignore', windowsHide: true })
-    return true
-  } catch {
-    return false
-  }
-}
-
-const RAN_AS_ADMIN_FLAG = '--dcshub-ran-as-admin'
-if (process.platform === 'win32' && !process.argv.includes(RAN_AS_ADMIN_FLAG)) {
-  if (!isRunningAsAdmin()) {
-    try {
-      const args = [...process.argv.slice(1), RAN_AS_ADMIN_FLAG]
-      const escapedArgs = args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(',')
-      const psCmd = `Start-Process -FilePath "${process.execPath}" -ArgumentList ${escapedArgs} -Verb RunAs`
-      spawn('powershell', ['-NoProfile', '-Command', psCmd], {
-        detached: true, stdio: 'ignore', shell: false, windowsHide: true,
-      }).unref()
-      app.quit()
-    } catch { /* fall through */ }
-  }
-}
-
 interface OverlaySettings {
   hotkey: string
   opacity: number
