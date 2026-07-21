@@ -8,6 +8,7 @@
 - 安装版与主程序统一请求管理员权限，保留 Electron 的 Per-Monitor DPI 适配，避免不同解压路径继承不一致的权限和缩放兼容设置。
 - 修复首次安装默认不启用内置软件后，软件目录集成测试仍按旧默认值断言而导致的 GitHub CI 连续失败。
 - Release 工作流同时接受 `V*` 与 `v*` 标签，并只为安装包生成和发布 SHA-256 校验值。
+- 发布构建直接使用 `electron-overlay-window` 自带的 Windows N-API 预编译件，避免 GitHub Runner 因缺少特定 Visual Studio 工具链而失败。
 
 ## V2.0 - 2026-07-20
 
