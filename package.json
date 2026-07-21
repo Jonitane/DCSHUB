@@ -1,6 +1,6 @@
 {
   "name": "dcs-control-hub",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "description": "面向 DCS World 玩家的驱动、工具、插件与本地模组统一管理中心",
   "main": "dist-electron/main.js",
   "author": "DCSHUB",

@@ -508,6 +508,21 @@ function detectLanguage(text: string): string {
   return latin > 20 ? 'en' : 'unknown'
 }
 
+function detectQuestionLanguage(question: string): 'zh' | 'en' | 'ru' {
+  const chinese = (question.match(/[\u3400-\u9fff]/g) || []).length
+  const cyrillic = (question.match(/[\u0400-\u04ff]/g) || []).length
+  const latin = (question.match(/[A-Za-z]/g) || []).length
+  if (chinese > Math.max(2, latin * 0.12)) return 'zh'
+  if (cyrillic > Math.max(2, latin * 0.2)) return 'ru'
+  return 'en'
+}
+
+function languageInstruction(lang: 'zh' | 'en' | 'ru'): string {
+  if (lang === 'en') return 'Respond entirely in English. Use natural, conversational English like a flight instructor in the cockpit. Keep panel/switch names in their original English terms.'
+  if (lang === 'ru') return 'Отвечайте полностью на русском языке. Используйте естественный разговорный русский, как инструктор в кабине. Названия панелей и переключателей оставляйте на языке оригинала.'
+  return '使用自然口语化中文回答，像在座舱里带飞说话一样。面板开关保留英文原名，首次出现括号附中文。'
+}
+
 function detectAircraft(identity: string, text = ''): string | null {
   const normalizedIdentity = normalizeRelative(identity).normalize('NFKC')
   const identityMatch = AIRCRAFT_ALIASES.find(([, pattern]) => pattern.test(normalizedIdentity))
@@ -1336,7 +1351,11 @@ export class ManualLibraryService {
       const key = source.page ? `${source.documentId}:${source.page}` : source.id
       return allSources.findIndex((s) => (s.page ? `${s.documentId}:${s.page}` : s.id) === key) === index
     }).slice(0, 16)
-    const answerSystemPrompt = `你是 DCS World 资深中文飞行教官。你的任务是基于提供的手册原文，给飞行员一份**完整、可操作、结构清晰**的操作指南。
+    const qLang = detectQuestionLanguage(cleaned)
+    const langInstr = languageInstruction(qLang)
+    const answerSystemPrompt = `你是 DCS World 资深飞行教官。你的任务是基于提供的手册原文，给飞行员一份**完整、可操作、结构清晰**的操作指南。
+
+**回答语言**：${langInstr}
 
 **核心原则**：
 - 你**只能**使用下面提供的手册原文作为事实依据，**严禁凭训练常识或外部记忆编造**按键、开关位置、操作顺序或模式名称
@@ -1350,7 +1369,7 @@ export class ManualLibraryService {
 - 非美机面板开关必须严格沿用该机型手册原文名称
 
 **回答结构要求（严格遵守，不要加其他内容）**：
-按以下顺序组织答案，手册中有就写，没有的章节跳过。**绝对禁止写任何开场白、寒暄、引导段落**——不要"好的咱们来聊聊"、"这个功能就是..."、"简单说..."这类废话，直接从第一个标题开始。
+按以下顺序组织答案，手册中有就写，没有的章节跳过。**绝对禁止写任何开场白、寒暄、引导段落**——直接从第一个标题开始。
 
 ### 前提条件 / 准备工作
 需要在什么模式、什么页面、什么开关位置下才能开始操作（如任务编辑器预设、控制权交接、界面呼出、电台调谐、ID设置等）
@@ -1365,9 +1384,8 @@ export class ManualLibraryService {
 如果手册里有快捷键/步骤总结表格，用简洁列表归纳关键操作
 
 **说话风格**：
-- 自然口语化中文，像在座舱里带飞说话一样
+- ${langInstr}
 - 用「先...然后...接下来...最后...」衔接步骤
-- 面板开关保留英文原名，首次出现括号附中文（如"TMS Up 长按（目标管理开关向上）"）
 - 严禁开场白、寒暄、总结性段落，直接进入标题内容
 
 **引用格式**：每个操作步骤行末必须标注来源编号 [S1]，便于飞行员查阅对应手册页确认。
@@ -1415,12 +1433,16 @@ export class ManualLibraryService {
   }
 
   private async auditProceduralAnswer(apiKey: string, question: string, context: string, draft: string, sources: ManualSearchHit[], evidenceBoundary = ''): Promise<string> {
+    const qLang = detectQuestionLanguage(question)
+    const langInstr = languageInstruction(qLang)
     const systemPrompt = `你是 DCS 技术手册的"证据审校员 + 带飞教官"。严格限制事实，但绝对不能机械照抄手册原文。${SOURCE_PRECEDENCE_GUIDE}
 
-先逐条核对草稿与来源的逐字一致性，再把通过核对的内容改写成**像教官在座舱里带飞说话一样**的自然中文：
-1. text 写"飞行员现在要做什么、怎么做"，是流畅自然的操作指令，不要生硬的文档腔；面板、按键、开关保留英文原名，首次出现时括号里附上中文含义和游戏设置里的中文功能名（如"TMS Up 长按（目标管理开关向上）"）。
+**回答语言**：${langInstr}
+
+先逐条核对草稿与来源的逐字一致性，再把通过核对的内容改写成教官在座舱里带飞说话一样的自然语言：
+1. text 写"飞行员现在要做什么、怎么做"，是流畅自然的操作指令，不要生硬的文档腔；面板、按键、开关保留英文原名，首次出现时括号里附上含义。
 2. explanation 用口语化的方式解释"为什么要做这一步、做完后应该看到/听到什么、怎么判断成功了"，可以用通俗的类比帮助新手理解；只能解释来源中有依据的事实，绝不能编造按钮、数值、顺序或系统反应。解释不出来就留空。
-3. quote 只放在 evidence 中供后台核验，不要出现在用户可见的 text/explanation 里。text/explanation 必须是自然、流畅、有教学感的中文，像真人教官在说话。
+3. quote 只放在 evidence 中供后台核验，不要出现在用户可见的 text/explanation 里。text/explanation 必须是自然、流畅、有教学感的语言，像真人教官在说话。
 4. 每个操作步骤、前提、结果、限制都必须给出来源编号和该来源中的逐字原文 quote。quote 必须是来源原文的连续子串，禁止翻译、改写、省略号或拼接。如果来源是一套从 1 开始的编号流程，必须先保留适用模式和全部必需前提，再按原顺序覆盖到核心动作及成功结果；不得跳过中间编号。
 5. 来源没有直接写出的按钮、模式、数值、顺序和系统反应必须删除。${DCS_TERMINOLOGY_ROLE_GUIDE} 准备/校准内容只能标为 prerequisite，不能冒充核心 step；不同流程不得拼接；不得把 SPI、TDC、SOI、传感器控制权、目标指定等不同概念相互替换。
 
@@ -2024,7 +2046,7 @@ export class ManualLibraryService {
         output_config: { effort: 'max' },
         tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
         tool_choice: { type: 'auto' },
-        system: '你是 DCS World 技术资料在线研究助手。必须先使用联网搜索核对问题，优先采用 Eagle Dynamics 官方手册、官方更新日志、官方论坛和模组开发者的一手资料；社区资料只能作为补充并明确标注。回答使用用户语言，区分不同机型、游戏版本和现实航空资料。不要把其他机型的按键或系统术语套入当前机型。所有关键结论都附可点击的 Markdown 来源链接；若网络证据互相冲突，说明冲突和适用版本。',
+        system: `你是 DCS World 技术资料在线研究助手。必须先使用联网搜索核对问题，优先采用 Eagle Dynamics 官方手册、官方更新日志、官方论坛和模组开发者的一手资料；社区资料只能作为补充并明确标注。${languageInstruction(detectQuestionLanguage(cleaned))} 区分不同机型、游戏版本和现实航空资料。不要把其他机型的按键或系统术语套入当前机型。所有关键结论都附可点击的 Markdown 来源链接；若网络证据互相冲突，说明冲突和适用版本。`,
         messages: [{ role: 'user', content: [{ type: 'text', text: cleaned }] }],
       }),
     }, 180_000)
@@ -2612,6 +2634,7 @@ export class ManualLibraryService {
       RETRIEVAL_PIPELINE_VERSION,
       DEFAULT_MODEL,
       this.manifest.lastIndexedAt || 'no-index',
+      detectQuestionLanguage(question),
       question.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim(),
     ].join('\n')).digest('hex')
   }
@@ -2647,6 +2670,7 @@ export class ManualLibraryService {
     return crypto.createHash('sha256').update([
       ONLINE_ANSWER_CACHE_VERSION,
       ONLINE_SEARCH_MODEL,
+      detectQuestionLanguage(question),
       question.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim(),
     ].join('\n')).digest('hex')
   }
