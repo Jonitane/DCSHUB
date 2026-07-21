@@ -618,13 +618,13 @@ function registerWindowIpc(): void {
   ipcMain.handle('window:open-update-page', () => shell.openExternal(UPDATE_DOWNLOAD_URL))
   ipcMain.handle('window:reset-all-user-data', async () => {
     // 同步清理：停止 hook 和快捷键（app.exit 会强制终止进程，子进程也会被清理）
-    try { moduleManager?.setMonitoringActive(false) } catch {}
-    try { stopKeyboardHook() } catch {}
-    try { globalShortcut.unregisterAll() } catch {}
-    try { stopDcsProcessMonitor() } catch {}
+    try { moduleManager?.setMonitoringActive(false) } catch { /* Best-effort cleanup before relaunch. */ }
+    try { stopKeyboardHook() } catch { /* Best-effort cleanup before relaunch. */ }
+    try { globalShortcut.unregisterAll() } catch { /* Best-effort cleanup before relaunch. */ }
+    try { stopDcsProcessMonitor() } catch { /* Best-effort cleanup before relaunch. */ }
     // 清除 session 缓存
-    try { await session.defaultSession.clearCache() } catch {}
-    try { await session.defaultSession.clearStorageData() } catch {}
+    try { await session.defaultSession.clearCache() } catch { /* Relaunch must continue if cache cleanup fails. */ }
+    try { await session.defaultSession.clearStorageData() } catch { /* Relaunch must continue if storage cleanup fails. */ }
     // relaunch + exit(0) 直接强制退出，不触发 before-quit / window-all-closed
     const relaunchArgs = process.argv.slice(1).filter((argument) => argument !== RESET_USER_DATA_ARG)
     app.relaunch({ args: [...relaunchArgs, RESET_USER_DATA_ARG] })
@@ -964,7 +964,7 @@ app.on('before-quit', (event) => {
   stopDcsProcessMonitor()
   stopKeyboardHook()
   globalShortcut.unregisterAll()
-  try { overlayWin?.destroy() } catch {}
+  try { overlayWin?.destroy() } catch { /* The overlay may already be destroyed. */ }
   overlayWin = null
   void moduleManager.dispose().finally(() => app.quit())
 })

@@ -297,9 +297,11 @@ function normalizeQuestionInput(raw: string): string {
   let cleaned = raw.normalize('NFKC').trim()
   for (const abbr of DCS_ABBREVIATIONS.sort((a, b) => b.length - a.length)) {
     const escaped = abbr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const beforeAbbr = new RegExp(`([a-z0-9\u4e00-\u9fff])${escaped}`, 'gi')
+    // Separate abbreviations from adjacent CJK text, but never split a longer
+    // Latin identifier (for example PRI inside SOURCE_PRIORITY_CHECK).
+    const beforeAbbr = new RegExp(`([\u4e00-\u9fff])${escaped}`, 'gi')
     cleaned = cleaned.replace(beforeAbbr, `$1 ${abbr}`)
-    const afterAbbr = new RegExp(`${escaped}([a-z\u4e00-\u9fff])`, 'gi')
+    const afterAbbr = new RegExp(`${escaped}([\u4e00-\u9fff])`, 'gi')
     cleaned = cleaned.replace(afterAbbr, `${abbr} $1`)
   }
   cleaned = cleaned.replace(/\s+/g, ' ').trim()
@@ -1408,7 +1410,11 @@ export class ManualLibraryService {
     const topSourceIsAircraftMatched = aircraftScope.length > 0 && dedupSources[0]?.aircraft && aircraftScope.includes(dedupSources[0].aircraft!)
     const topScoreHighEnough = dedupSources[0] && dedupSources[0].score >= 0.4
     const hasEnoughSources = dedupSources.length >= 3
-    const shouldUseDirectAnswer = topSourceIsAircraftMatched && (topScoreHighEnough || hasEnoughSources)
+    // Retrieval confidence cannot prove that a generated operation sequence is
+    // faithful. Always run procedural answers through the evidence auditor.
+    const shouldUseDirectAnswer = !isProceduralQuestion(cleaned)
+      && topSourceIsAircraftMatched
+      && (topScoreHighEnough || hasEnoughSources)
 
     if (shouldUseDirectAnswer) {
       const result = { answer: initialAnswer, sources: dedupSources, model: answerModel }
@@ -1702,7 +1708,9 @@ export class ManualLibraryService {
           const directEvidence = Math.max(...group.map((item) => item.taskEvidence)) >= 6
           if (!directEvidence || !taskSubjectAndAction || (!numberedSequence && !directTaskHeading)) return false
         }
-        return actionCoverage >= 2 || pageCount >= 2 || (pageCount === 0 && actionCoverage >= 1)
+        // A concise one-page PDF procedure is just as valid as a non-paginated
+        // text note; do not discard it merely because it has a page number.
+        return actionCoverage >= 2 || pageCount >= 2 || (pageCount <= 1 && actionCoverage >= 1)
       })
       if (candidates.length === 0) continue
       const selected = candidates.sort((left, right) => (
