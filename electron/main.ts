@@ -641,23 +641,15 @@ function createWindow(): void {
 function registerWindowIpc(): void {
   ipcMain.handle('window:open-update-page', () => shell.openExternal(UPDATE_DOWNLOAD_URL))
   ipcMain.handle('window:reset-all-user-data', async () => {
-    // Prevent before-quit handler from racing with our cleanup
-    quitCleanupStarted = true
+    // 同步清理：停止 hook 和快捷键（app.exit 会强制终止进程，子进程也会被清理）
     try { moduleManager?.setMonitoringActive(false) } catch {}
-    try { await moduleManager?.dispose() } catch {}
-    try { dcsLaunch?.dispose?.() } catch {}
-    try { modManager?.dispose?.() } catch {}
-    for (const viewer of [...manualViewerWindows]) { try { viewer.destroy() } catch {} }
-    manualViewerWindows.clear()
-    try { overlayWin?.destroy() } catch {}
-    overlayWin = null
-    stopKeyboardHook()
-    globalShortcut.unregisterAll()
-    // Destroy instead of close to avoid triggering window-all-closed -> app.quit() race
-    try { win?.destroy() } catch {}
-    win = null
+    try { stopKeyboardHook() } catch {}
+    try { globalShortcut.unregisterAll() } catch {}
+    try { stopDcsProcessMonitor() } catch {}
+    // 清除 session 缓存
     try { await session.defaultSession.clearCache() } catch {}
-    try { await session.defaultSession.clearStorageData({ storages: ['cookies', 'filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers', 'cachestorage'] }) } catch {}
+    try { await session.defaultSession.clearStorageData() } catch {}
+    // relaunch + exit(0) 直接强制退出，不触发 before-quit / window-all-closed
     const relaunchArgs = process.argv.slice(1).filter((argument) => argument !== RESET_USER_DATA_ARG)
     app.relaunch({ args: [...relaunchArgs, RESET_USER_DATA_ARG] })
     app.exit(0)
