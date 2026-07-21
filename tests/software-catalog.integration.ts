@@ -31,7 +31,9 @@ async function main() {
     const catalog = new SoftwareCatalogService(root, manager, [{ id: 'builtin-test', createDriver: builtinDriver }], false)
     await manager.initialize()
 
-    assert.equal(catalog.overview().items[0].enabled, true)
+    // A fresh install intentionally starts with no built-in software selected;
+    // onboarding lets the user opt in to the modules they actually use.
+    assert.equal(catalog.overview().items[0].enabled, false)
     assert.equal(catalog.overview().items[0].silentLaunch, true)
     assert.equal(catalog.setSilentLaunch('builtin-test', false).items[0].silentLaunch, false)
     assert.equal(catalog.setSilentLaunch('builtin-test', true).items[0].silentLaunch, true)

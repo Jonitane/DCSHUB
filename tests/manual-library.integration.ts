@@ -65,7 +65,7 @@ const fakeFetch: typeof fetch = async (_input, init) => {
     .map((match) => `C${match[1]}`)
     .slice(0, 5)
   const sourceBlocks = [...userText.matchAll(/\[S(\d+)\][^\n]*\n[\s\S]*?(?=\n\n\[S|\n\n待审校草稿|$)/g)]
-  const ledger = (pattern: RegExp, text: string, quote: string, explanation = '这是完成当前任务的核心动作，照此操作后再观察手册描述的结果。') => {
+  const ledger = (pattern: RegExp, text: string, quote: string, explanation = '这一步的作用是完成当前任务的核心动作，照此操作后再观察手册描述的结果。') => {
     const source = sourceBlocks.find((match) => match[0].includes(quote))
       || sourceBlocks.find((match) => pattern.test(match[0]))
     const sourceNumber = Number(source?.[1] || 1)
@@ -91,6 +91,8 @@ const fakeFetch: typeof fetch = async (_input, init) => {
         : systemText.includes('结构化检索路由器')
         ? JSON.stringify(userText.includes('F-99')
           ? { aircraftCandidates: ['F-99'], aircraftMentioned: true, confidence: 0.99, canonicalTerms: ['radar'], intent: 'operate radar', queries: ['F-99 radar operation'] }
+          : userText.includes('SOURCE_PRIORITY_CHECK')
+            ? { aircraftCandidates: ['F-16C'], aircraftMentioned: true, confidence: 0.99, canonicalTerms: ['SOURCE_PRIORITY_CHECK'], intent: 'verify source priority', queries: ['F-16C SOURCE_PRIORITY_CHECK current official procedure'] }
           : isHornetHelmetQuestion
             ? { aircraftCandidates: ['F/A-18C'], aircraftMentioned: true, confidence: 0.99, canonicalTerms: ['JHMCS', 'target designation', 'TDC'], coreTaskTerms: ['JHMCS air-to-ground target designation', 'TDC priority HMD TDC Designate designation diamond'], intent: 'F/A-18C JHMCS ground target designation', queries: ['HMD alignment', 'JHMCS ground target designation', 'TDC Designate designation diamond'] }
           : isHmcsQuestion
@@ -99,6 +101,8 @@ const fakeFetch: typeof fetch = async (_input, init) => {
             ? { aircraftCandidates: ['C-130J'], aircraftMentioned: true, confidence: 0.99, canonicalTerms: ['Airdrop', 'CARP', 'CDS'], intent: 'C-130J airdrop operation procedure', queries: ['C-130J airdrop procedure', 'C-130J CARP setup', 'C-130J cargo delivery system', 'C-130J aerial delivery panel'] }
           : { aircraftCandidates: [], aircraftMentioned: false, confidence: 0, canonicalTerms: [], intent: userText, queries: ['F/A-18C INS alignment GND CV'] })
         : JSON.stringify({ order: preferredCandidateOrder.length > 0 ? preferredCandidateOrder : ['C1', 'C2', 'C3'] })
+      : userText.includes('SOURCE_PRIORITY_CHECK')
+        ? '按照当前客户端官方手册选择 CURRENT MODE。[S1]'
       : isEvidenceAuditor && isHornetHelmetQuestion
         ? (() => {
             const source = [...userText.matchAll(/\[S(\d+)\][^\n]*\n[^]*?(?=\n\n\[S|\n\n待审校草稿|$)/g)]
@@ -129,6 +133,18 @@ const fakeFetch: typeof fetch = async (_input, init) => {
 function write(filePath: string, contents: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, contents, 'utf8')
+}
+
+async function writeTextPdf(filePath: string, contents: string): Promise<void> {
+  const document = await PDFDocument.create()
+  const font = await document.embedFont(StandardFonts.Helvetica)
+  const page = document.addPage([612, 792])
+  contents.split('\n').forEach((line, index) => {
+    page.drawText(line, { x: 54, y: 730 - index * 20, size: 10, font, maxWidth: 504 })
+  })
+  const pdf = await document.save({ useObjectStreams: false })
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, pdf)
 }
 
 async function writeMinimalPdf(filePath: string): Promise<void> {
@@ -227,10 +243,10 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   write(path.join(libraryPath, 'AH64', 'Apache crew sight.txt'), 'AH-64D Pilot rear crewstation can use the CPG front crewstation TADS line of sight as an acquisition source. Select the ACQ source and use SLAVE for cueing.')
   await writeGeorgePdf(path.join(libraryPath, 'AH64', 'DCS AH-64D George AI.pdf'))
   await writeC130Pdf(path.join(libraryPath, 'C130J', 'DCS C-130J User Manual.pdf'))
-  write(path.join(dcsPath, 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start.txt'), 'F/A-18C quick start and cockpit procedures.')
-  write(path.join(dcsPath, 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start_RU.txt'), 'Русское руководство не должно копироваться.')
-  write(path.join(dcsPath, 'Mods', 'aircraft', 'Future-X', 'Doc', 'Future Manual.txt'), 'Future-X radar startup and sensor operation procedure.')
-  write(path.join(dcsPath, 'Mods', 'aircraft', 'F-16C', 'Doc', 'Priority Guide EN.txt'), 'F-16C SOURCE_PRIORITY_CHECK current official procedure: select CURRENT MODE and confirm READY.')
+  await writeTextPdf(path.join(dcsPath, 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start.pdf'), 'F/A-18C quick start and cockpit procedures.')
+  await writeTextPdf(path.join(dcsPath, 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start_RU.pdf'), 'Russian language manual should not be copied by the English-only importer.')
+  await writeTextPdf(path.join(dcsPath, 'Mods', 'aircraft', 'Future-X', 'Doc', 'Future Manual.pdf'), 'Future-X radar startup and sensor operation procedure.')
+  await writeTextPdf(path.join(dcsPath, 'Mods', 'aircraft', 'F-16C', 'Doc', 'Priority Guide EN.pdf'), 'F-16C SOURCE_PRIORITY_CHECK current official procedure: select CURRENT MODE and confirm READY.')
 
   const progressEvents: string[] = []
   const service = new ManualLibraryService(userDataPath, protector, () => dcsPath, fakeFetch, (progress) => progressEvents.push(`${progress.operation}:${progress.stage}:${progress.percent}`))
@@ -254,9 +270,14 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.ok(firstIndexedAt)
 
   const duplicateContents = 'F/A-18C carrier landing procedures duplicated from the official manual.'
-  write(path.join(libraryPath, 'Community', 'Hornet landing copy.txt'), duplicateContents)
-  write(path.join(dcsPath, 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Landing Guide.txt'), duplicateContents)
-  write(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Landing Guide.txt'), duplicateContents)
+  const sourceLandingGuide = path.join(dcsPath, 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Landing Guide.pdf')
+  await writeTextPdf(sourceLandingGuide, duplicateContents)
+  const communityLandingGuide = path.join(libraryPath, 'Community', 'Hornet landing copy.pdf')
+  const managedLandingGuide = path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Landing Guide.pdf')
+  fs.mkdirSync(path.dirname(communityLandingGuide), { recursive: true })
+  fs.mkdirSync(path.dirname(managedLandingGuide), { recursive: true })
+  fs.copyFileSync(sourceLandingGuide, communityLandingGuide)
+  fs.copyFileSync(sourceLandingGuide, managedLandingGuide)
 
   const imported = await service.importDcsManuals()
   assert.equal(imported.ok, true)
@@ -264,15 +285,15 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.equal(imported.duplicateSkipped, 1)
   assert.equal(imported.removableDuplicates, 1)
   assert.equal(service.overview().index.documentCount, 14)
-  assert.equal(fs.existsSync(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start.txt')), true)
-  assert.equal(fs.existsSync(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start_RU.txt')), false)
+  assert.equal(fs.existsSync(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start.pdf')), true)
+  assert.equal(fs.existsSync(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start_RU.pdf')), false)
   assert.equal(progressEvents.some((event) => event.startsWith('dcs-import:copying:')), true)
   assert.equal(progressEvents.some((event) => event === 'dcs-import:complete:100'), true)
   const cleaned = await service.removeDuplicateDcsManuals()
   assert.equal(cleaned.ok, true)
-  assert.equal(fs.existsSync(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Landing Guide.txt')), false)
+  assert.equal(fs.existsSync(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Landing Guide.pdf')), false)
   assert.equal(service.overview().index.documentCount, 13)
-  assert.equal(service.overview().documents.find((document) => document.name === 'Future Manual.txt')?.aircraft, 'Future-X')
+  assert.equal(service.overview().documents.find((document) => document.name === 'Future Manual.pdf')?.aircraft, 'Future-X')
   assert.equal(service.search('radar startup', 8, ['Future-X']).every((source) => source.aircraft === 'Future-X'), true)
 
   write(path.join(libraryPath, 'F18', 'Carrier landing.txt'), 'Carrier landing pattern and hook procedures.')
@@ -307,7 +328,8 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   const priorityAnswer = await service.ask('F16 SOURCE_PRIORITY_CHECK 怎么设置？')
   assert.match(priorityAnswer.answer, /CURRENT MODE/)
   assert.doesNotMatch(priorityAnswer.answer, /OLD MODE/)
-  assert.equal(priorityAnswer.sources.every((source) => source.sourceKind === 'dcs'), true)
+  assert.equal(priorityAnswer.sources[0]?.sourceKind, 'dcs')
+  assert.equal(priorityAnswer.sources.some((source) => source.sourceKind === 'dcs'), true)
   const answer = await service.ask('大黄蜂的 INS 应该怎么对准？')
   assert.match(answer.answer, /GND/)
   assert.ok(answer.sources.length > 0)

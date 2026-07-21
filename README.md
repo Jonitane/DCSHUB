@@ -3,7 +3,7 @@
   <h1>DCSHUB</h1>
   <p>面向 DCS World 玩家的一体化启动管理中心 · 超级手册 AI 问答 · 本地模组管理</p>
   <p>
-    <a href="https://github.com/Jonitane/DCSHUB/releases/latest"><strong>⬇ 下载最新版 V2.0.3</strong></a>
+    <a href="https://github.com/Jonitane/DCSHUB/releases/latest"><strong>⬇ 下载最新版 V2.1.6</strong></a>
     · <a href="https://github.com/Jonitane/DCSHUB/issues">反馈问题</a>
   </p>
 </div>

@@ -1,6 +1,6 @@
 {
   "name": "dcs-control-hub",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "description": "面向 DCS World 玩家的驱动、工具、插件与本地模组统一管理中心",
   "main": "dist-electron/main.js",
   "author": "DCSHUB",
@@ -18,6 +18,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build && electron-builder",
+    "build:debug-portable": "tsc -b && vite build && electron-builder --dir",
     "build:web": "tsc -b && vite build",
     "test": "npm run test:dcs-launch && npm run test:mod-manager && npm run test:software-catalog && npm run test:srs && npm run test:i18n && npm run test:manual-library",
     "test:dcs-launch": "esbuild tests/dcs-launch.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/dcs-launch.integration.cjs && node .tmp/dcs-launch.integration.cjs",
@@ -84,13 +85,9 @@
       "dist-electron"
     ],
     "win": {
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator",
       "target": [
-        {
-          "target": "dir",
-          "arch": [
-            "x64"
-          ]
-        },
         {
           "target": "nsis",
           "arch": [
