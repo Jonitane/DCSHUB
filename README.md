@@ -2,7 +2,7 @@
 
 DCSHUB 是面向 DCS World 玩家的 Windows 桌面管理工具，用于统一启动飞行所需的软件、管理本地模组，并通过本地手册索引和 DeepSeek 提供可核对原文的问答能力。
 
-当前源码版本：V2.2.0
+当前源码版本：V2.2.1
 
 下载地址：[GitHub Releases](https://github.com/Jonitane/DCSHUB/releases/latest)
 

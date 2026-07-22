@@ -397,14 +397,17 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="mt-4 flex justify-end border-t border-border/30 pt-3">
-            <button
-              type="button"
-              title="打开 DCSHUB 更新下载页面"
-              onClick={() => void window.electronAPI?.windowControls.openUpdatePage()}
-              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-muted-foreground/70 transition-colors hover:bg-muted/50 hover:text-muted-foreground"
-            >
-              <RefreshCw className="size-3" />检查更新 · {APP_VERSION}
-            </button>
+            <div className="flex flex-col items-end">
+              <button
+                type="button"
+                title="打开 DCSHUB 更新下载页面"
+                onClick={() => void window.electronAPI?.windowControls.openUpdatePage()}
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-muted-foreground/70 transition-colors hover:bg-muted/50 hover:text-muted-foreground"
+              >
+                <RefreshCw className="size-3" />检查更新 · {APP_VERSION}
+              </button>
+              <span className="px-2 text-[10px] text-muted-foreground/50">Q:1022674486</span>
+            </div>
           </div>
         </CardContent>
       </Card>
