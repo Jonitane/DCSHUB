@@ -67,6 +67,11 @@ jobs:
           $tag = "${{ github.ref_name }}"
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --title "DCSHUB $tag" --generate-notes
+            $notesPath = "docs/releases/$tag.md"
+            if (Test-Path -LiteralPath $notesPath) {
+              gh release create $tag --title "DCSHUB $tag" --notes-file $notesPath
+            } else {
+              gh release create $tag --title "DCSHUB $tag" --generate-notes
+            }
           }
           gh release upload $tag release/*.exe release/SHA256SUMS.txt --clobber
