@@ -1,12 +1,10 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { LayoutDashboard, Settings, Monitor, Gamepad2, Eye, Package, Rocket, PackageOpen, Plus, LoaderCircle, LogOut, BookOpenText } from 'lucide-react'
 import { toast } from 'sonner'
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem } from '@/components/ui/sidebar'
 import { Image } from '@/components/ui/image'
 import { useModuleContext } from '@/modules/ModuleContext'
-import { Switch } from '@/components/ui/switch'
-import type { SoftwareCatalogOverview } from '@/shared/software-catalog-contracts'
 import { APP_VERSION } from '@/shared/app-meta'
 import { useI18n } from '@/lib/i18n'
 
@@ -31,20 +29,12 @@ export default function AppSidebar() {
   const { modules, refresh } = useModuleContext()
   const [addingSoftware, setAddingSoftware] = useState(false)
   const [exiting, setExiting] = useState(false)
-  const [launchModeOperation, setLaunchModeOperation] = useState<string | null>(null)
-  const [catalog, setCatalog] = useState<SoftwareCatalogOverview | null>(null)
-  const moduleCatalogKey = modules.map((module) => module.id).sort().join('|')
-
-  useEffect(() => {
-    void window.electronAPI?.softwareCatalog.overview().then(setCatalog).catch(() => undefined)
-  }, [moduleCatalogKey])
 
   const addSoftware = async () => {
     const before = new Set(modules.map((module) => module.id))
     setAddingSoftware(true)
     try {
       const overview = await window.electronAPI?.softwareCatalog.chooseAndAdd()
-      if (overview) setCatalog(overview)
       const added = overview?.items.find((item) => item.kind === 'custom' && item.enabled && !before.has(item.id))
       if (added) {
         await refresh()
@@ -58,18 +48,6 @@ export default function AppSidebar() {
     }
   }
 
-  const setSilentLaunch = async (moduleId: string, silent: boolean) => {
-    setLaunchModeOperation(moduleId)
-    try {
-      const overview = await window.electronAPI?.softwareCatalog.setSilentLaunch(moduleId, silent)
-      if (overview) setCatalog(overview)
-    } catch (reason) {
-      toast.error('启动方式保存失败', { description: reason instanceof Error ? reason.message : String(reason) })
-    } finally {
-      setLaunchModeOperation(null)
-    }
-  }
-
   const exitApplication = () => {
     setExiting(true)
     window.electronAPI?.windowControls.quit()
@@ -79,26 +57,26 @@ export default function AppSidebar() {
     <Sidebar collapsible="icon" className="z-[60] border-r border-sidebar-border" style={{ '--sidebar-width': '17rem' } as React.CSSProperties}>
       <SidebarHeader className="app-drag-region border-b border-sidebar-border">
         <div className="relative flex items-center gap-2.5 px-2 py-3.5 group-data-[state=collapsed]:justify-center group-data-[state=collapsed]:px-0">
-          <div className="size-10 shrink-0 overflow-hidden rounded-lg">
-            <Image src="/images/dcs-game-icon.png" alt="DCS" className="size-full object-cover" />
+          <div className="flex size-11 shrink-0 items-center justify-center bg-transparent group-data-[state=collapsed]:size-9">
+            <Image src="/images/dcshub-mark.png" alt="Dcs Hub" className="size-full bg-transparent object-contain [background-image:none]" />
           </div>
           <div className="min-w-0 flex-1 group-data-[state=collapsed]:hidden">
-            <div className="truncate text-sm font-semibold tracking-wide text-sidebar-foreground">DCS Control Hub</div>
-            <div className="mt-0.5 flex items-center gap-2 text-[10px] uppercase tracking-widest text-muted-foreground">
-              <span>Flight Sim</span>
-              <span className="rounded border border-sidebar-border/70 bg-sidebar-accent/45 px-1.5 py-0.5 text-[9px] font-semibold tracking-normal text-sidebar-foreground/70">{APP_VERSION}</span>
-            </div>
+            <div className="truncate text-base font-bold tracking-tight text-sidebar-foreground">Dcs Hub</div>
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Flight Sim</div>
           </div>
-          <button
-            type="button"
-            className="app-no-drag flex h-7 shrink-0 items-center gap-1 overflow-hidden rounded-md border border-sidebar-border/75 bg-sidebar-accent/55 px-1.5 text-[9px] font-semibold text-sidebar-foreground/75 shadow-sm transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary group-data-[state=collapsed]:absolute group-data-[state=collapsed]:bottom-2 group-data-[state=collapsed]:right-0 group-data-[state=collapsed]:size-5 group-data-[state=collapsed]:justify-center group-data-[state=collapsed]:p-0"
-            aria-label={language === 'zh-CN' ? '切换到英文' : 'Switch to Chinese'}
-            title={language === 'zh-CN' ? 'English' : '中文'}
-            onClick={toggleLanguage}
-          >
-            <Image src={language === 'zh-CN' ? '/flags/cn.svg' : '/flags/us.svg'} alt="" className="h-3.5 w-5 rounded-[2px] object-cover group-data-[state=collapsed]:h-2.5 group-data-[state=collapsed]:w-4" />
-            <span className="group-data-[state=collapsed]:hidden">{language === 'zh-CN' ? '中' : 'EN'}</span>
-          </button>
+          <div className="app-no-drag flex shrink-0 flex-col items-end gap-1 group-data-[state=collapsed]:absolute group-data-[state=collapsed]:bottom-1 group-data-[state=collapsed]:right-0">
+            <button
+              type="button"
+              className="flex h-7 items-center gap-1 overflow-hidden rounded-md border border-sidebar-border/75 bg-sidebar-accent/55 px-1.5 text-[9px] font-semibold text-sidebar-foreground/75 shadow-sm transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary group-data-[state=collapsed]:size-5 group-data-[state=collapsed]:justify-center group-data-[state=collapsed]:p-0"
+              aria-label={language === 'zh-CN' ? '切换到英文' : 'Switch to Chinese'}
+              title={language === 'zh-CN' ? 'English' : '中文'}
+              onClick={toggleLanguage}
+            >
+              <Image src={language === 'zh-CN' ? '/flags/cn.svg' : '/flags/us.svg'} alt="" className="h-3.5 w-5 rounded-[2px] object-cover group-data-[state=collapsed]:h-2.5 group-data-[state=collapsed]:w-4" />
+              <span className="group-data-[state=collapsed]:hidden">{language === 'zh-CN' ? '中' : 'EN'}</span>
+            </button>
+            <span className="rounded border border-sidebar-border/65 bg-sidebar-accent/35 px-1.5 py-0.5 text-[8px] font-semibold leading-none text-sidebar-foreground/60 group-data-[state=collapsed]:hidden">{APP_VERSION}</span>
+          </div>
         </div>
       </SidebarHeader>
 
@@ -115,11 +93,9 @@ export default function AppSidebar() {
               const route = `/module/${module.id}`
               const Icon = ICON_MAP[module.icon || ''] || Package
               const active = pathname === route
-              const catalogItem = catalog?.items.find((item) => item.id === module.id)
-              const silentLaunch = catalogItem?.silentLaunch !== false
               return (
-                <SidebarMenuItem key={module.id} className="flex items-center gap-0.5">
-                  <NavLink to={route} className={`${navItemClass(active)} min-w-0 flex-1`}>
+                <SidebarMenuItem key={module.id}>
+                  <NavLink to={route} className={`${navItemClass(active)} w-full min-w-0`}>
                     <span className={navIconClass(active)}>
                       {module.brandLogo
                         ? <Image src={module.brandLogo} alt={module.displayName} className="size-[17px] object-contain" />
@@ -127,16 +103,6 @@ export default function AppSidebar() {
                     </span>
                     <span className="relative z-10 min-w-0 flex-1 truncate text-sm font-medium group-data-[state=collapsed]:hidden">{module.displayName}</span>
                   </NavLink>
-                  <div className="flex shrink-0 items-center gap-0.5 pr-0.5 group-data-[state=collapsed]:hidden" title={silentLaunch ? '静默启动' : '直接启动'}>
-                    <span className={`w-6 text-right text-[8px] font-medium ${silentLaunch ? 'text-primary' : 'text-muted-foreground'}`}>{silentLaunch ? '静默' : '直接'}</span>
-                    <Switch
-                      aria-label={`${module.displayName} 静默启动`}
-                      checked={silentLaunch}
-                      disabled={!catalogItem || launchModeOperation !== null}
-                      className="-mx-1.5 scale-[0.62]"
-                      onCheckedChange={(checked) => void setSilentLaunch(module.id, checked)}
-                    />
-                  </div>
                 </SidebarMenuItem>
               )
             })}

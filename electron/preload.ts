@@ -4,6 +4,7 @@ import type { DcsBridge } from '../src/shared/dcs-contracts'
 import type { SoftwareCatalogBridge } from '../src/shared/software-catalog-contracts'
 import type { WindowControlsBridge, OverlayBridge } from '../src/shared/window-contracts'
 import type { ManualLibraryBridge, ManualLibraryProgress } from '../src/shared/manual-library-contracts'
+import type { UpdateBridge } from '../src/shared/update-contracts'
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron') as typeof import('electron')
 
@@ -73,6 +74,7 @@ const softwareCatalog: SoftwareCatalogBridge = {
   useAutomaticDetection: () => ipcRenderer.invoke('software-catalog:use-automatic-detection'),
   chooseBuiltinExecutable: (id: string) => ipcRenderer.invoke('software-catalog:choose-builtin-executable', id),
   setSilentLaunch: (id: string, silent: boolean) => ipcRenderer.invoke('software-catalog:set-silent-launch', id, silent),
+  setLaunchDelay: (id: string, seconds: number) => ipcRenderer.invoke('software-catalog:set-launch-delay', id, seconds),
   setEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke('software-catalog:set-enabled', id, enabled),
   remove: (id: string) => ipcRenderer.invoke('software-catalog:remove', id),
   completeInitialSetup: (enabledIds: string[]) => ipcRenderer.invoke('software-catalog:complete-setup', enabledIds),
@@ -115,6 +117,13 @@ const windowControls: WindowControlsBridge = {
   resetAllUserData: () => ipcRenderer.invoke('window:reset-all-user-data'),
 }
 
+const updates: UpdateBridge = {
+  settings: () => ipcRenderer.invoke('updates:settings'),
+  setAutomaticChecks: (enabled: boolean) => ipcRenderer.invoke('updates:set-automatic-checks', enabled),
+  check: (force = false) => ipcRenderer.invoke('updates:check', force),
+  openDownload: (url: string) => ipcRenderer.invoke('updates:open-download', url),
+}
+
 const overlay: OverlayBridge = {
   hide: () => ipcRenderer.send('overlay:hide'),
   getSettings: () => ipcRenderer.invoke('overlay:get-settings'),
@@ -122,13 +131,23 @@ const overlay: OverlayBridge = {
   setOpacity: (opacity: number) => ipcRenderer.invoke('overlay:set-opacity', opacity),
   setSize: (width: number, height: number) => ipcRenderer.invoke('overlay:set-size', width, height),
   setEnabled: (enabled: boolean) => ipcRenderer.invoke('overlay:set-enabled', enabled),
+  getDisplayMode: () => ipcRenderer.invoke('overlay:get-display-mode'),
+  setDisplayMode: (mode) => ipcRenderer.invoke('overlay:set-display-mode', mode),
+  moveVr: (normalizedDeltaX, normalizedDeltaY) => ipcRenderer.invoke('overlay:move-vr', normalizedDeltaX, normalizedDeltaY),
+  beginTextInput: () => ipcRenderer.invoke('overlay:begin-text-input'),
+  endTextInput: () => ipcRenderer.invoke('overlay:end-text-input'),
   onFocusInput: (callback: () => void) => {
     const handler = () => callback()
     ipcRenderer.on('overlay:focus-input', handler)
     return () => ipcRenderer.removeListener('overlay:focus-input', handler)
   },
+  onDisplayModeChanged: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: Parameters<typeof callback>[0]) => callback(status)
+    ipcRenderer.on('overlay:display-mode-changed', handler)
+    return () => ipcRenderer.removeListener('overlay:display-mode-changed', handler)
+  },
 }
 
-contextBridge.exposeInMainWorld('electronAPI', { modules, modManager, dcs, softwareCatalog, manualLibrary, windowControls, overlay })
+contextBridge.exposeInMainWorld('electronAPI', { modules, modManager, dcs, softwareCatalog, manualLibrary, windowControls, updates, overlay })
 
 export {}

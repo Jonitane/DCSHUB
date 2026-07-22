@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import type { ChuckGuideCatalogItem, ManualLibraryOverview, ManualLibraryProgress } from '@/shared/manual-library-contracts'
-import type { OverlaySettings } from '@/shared/window-contracts'
+import type { OverlaySettings, VrOverlayStatus } from '@/shared/window-contracts'
 
 function keyEventToAccelerator(e: KeyboardEvent): string | null {
   const parts: string[] = []
@@ -73,6 +73,12 @@ function keyEventToAccelerator(e: KeyboardEvent): string | null {
 
 function formatHotkeyForDisplay(accelerator: string): string {
   return accelerator
+    .replace(/num([0-9])/gi, 'Num $1')
+    .replace(/numadd/gi, 'Num +')
+    .replace(/numsub/gi, 'Num -')
+    .replace(/nummult/gi, 'Num ×')
+    .replace(/numdiv/gi, 'Num ÷')
+    .replace(/numdec/gi, 'Num .')
     .replace(/\+/g, ' + ')
     .replace(/Control/g, 'Ctrl')
     .replace(/CommandOrControl/g, 'Ctrl')
@@ -80,7 +86,13 @@ function formatHotkeyForDisplay(accelerator: string): string {
     .replace(/Option/g, 'Alt')
 }
 
-function HotkeyRecorder({ settings: externalSettings }: { settings: OverlaySettings | null }) {
+function HotkeyRecorder({
+  settings: externalSettings,
+  onChange,
+}: {
+  settings: OverlaySettings | null
+  onChange: (settings: OverlaySettings) => void
+}) {
   const overlay = window.electronAPI?.overlay
   const [settings, setSettings] = useState<OverlaySettings | null>(externalSettings)
   const [recording, setRecording] = useState(false)
@@ -111,9 +123,14 @@ function HotkeyRecorder({ settings: externalSettings }: { settings: OverlaySetti
       e.stopPropagation()
       setRecording(false)
       setSaving(true)
-      overlay?.setHotkey(accel)
+      if (!overlay) {
+        setSaving(false)
+        return
+      }
+      overlay.setHotkey(accel)
         .then((next) => {
           setSettings(next)
+          onChange(next)
           toast.success('呼出热键已更新')
         })
         .catch((reason) => {
@@ -128,19 +145,20 @@ function HotkeyRecorder({ settings: externalSettings }: { settings: OverlaySetti
       window.removeEventListener('keydown', handler, true)
       window.removeEventListener('blur', blurHandler)
     }
-  }, [recording, overlay])
+  }, [onChange, recording, overlay])
 
   const currentHotkey = settings?.hotkey || 'F9'
+  const defaultHotkey = 'F9'
   const disabled = !settings?.enabled
 
   return (
     <div>
       <div className="flex items-center gap-2 text-sm font-semibold">
         <Keyboard className="size-4 text-primary" />
-        快捷键绑定
+        呼出/隐藏浮窗
       </div>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
-        设置后在 DCS 游戏运行时按该热键即可呼出/隐藏内置手册浮窗。支持组合键（如 Ctrl+Alt+K）。
+        DCS 运行时按一次呼出、再按一次隐藏；每次呼出都会把 VR 浮窗重新放到当前头部朝向的正前方。支持组合键（如 Ctrl+Alt+K）。
       </p>
       <div className="mt-3 flex items-center gap-3">
         <button
@@ -171,15 +189,16 @@ function HotkeyRecorder({ settings: externalSettings }: { settings: OverlaySetti
             </span>
           )}
         </button>
-        {settings && settings.hotkey !== 'F9' && !recording && !saving && !disabled && (
+        {settings && currentHotkey !== defaultHotkey && !recording && !saving && !disabled && (
           <Button
             size="sm"
             variant="ghost"
             className="text-muted-foreground hover:text-foreground"
             onClick={() => {
+              if (!overlay) return
               setSaving(true)
-              overlay?.setHotkey('F9')
-                .then((next) => { setSettings(next); toast.success('已恢复默认热键 F9') })
+              overlay.setHotkey(defaultHotkey)
+                .then((next) => { setSettings(next); onChange(next); toast.success(`已恢复默认热键 ${formatHotkeyForDisplay(defaultHotkey)}`) })
                 .catch((r) => toast.error('恢复失败', { description: r instanceof Error ? r.message : String(r) }))
                 .finally(() => setSaving(false))
             }}
@@ -210,6 +229,7 @@ export default function ManualLibrarySettingsCard() {
   const [duplicateCleanupOpen, setDuplicateCleanupOpen] = useState(false)
   const [removableDuplicates, setRemovableDuplicates] = useState(0)
   const [overlaySettings, setOverlaySettings] = useState<OverlaySettings | null>(null)
+  const [vrOverlayStatus, setVrOverlayStatus] = useState<VrOverlayStatus | null>(null)
 
   const refresh = useCallback(async () => {
     if (!bridge) return
@@ -224,6 +244,11 @@ export default function ManualLibrarySettingsCard() {
   useEffect(() => bridge?.onProgress(setProgress), [bridge])
   useEffect(() => {
     overlay?.getSettings().then(setOverlaySettings).catch(() => {})
+  }, [overlay])
+  useEffect(() => {
+    if (!overlay) return
+    void overlay.getDisplayMode().then(setVrOverlayStatus).catch(() => undefined)
+    return overlay.onDisplayModeChanged(setVrOverlayStatus)
   }, [overlay])
 
   const toggleOverlayEnabled = (checked: boolean) => {
@@ -403,9 +428,15 @@ export default function ManualLibrarySettingsCard() {
             <div className="flex items-center gap-2 text-sm font-semibold"><Gamepad2 className="size-4 text-primary" />内置手册窗口</div>
             <Switch checked={overlaySettings?.enabled ?? true} onCheckedChange={toggleOverlayEnabled} />
           </div>
-          <p className="mt-2 text-xs leading-5 text-muted-foreground">开启后在 DCS 运行时按热键即可呼出/隐藏问答浮窗，面板可拖动、支持本地问答与联网搜索。需要将 DCS 设为无边框窗口模式。</p>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">开启后可在 DCS 中使用快捷键呼出或隐藏超级手册。浮窗会自动跟随仪表板的桌面/VR 启动模式。</p>
+          {vrOverlayStatus && <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground"><span className={`size-1.5 rounded-full ${vrOverlayStatus.mode === 'vr' && vrOverlayStatus.available && !vrOverlayStatus.error ? 'bg-emerald-400' : 'bg-muted-foreground/50'}`} /><span>当前跟随：{vrOverlayStatus.mode === 'vr' ? 'VR / OpenXR' : '桌面'}</span>{vrOverlayStatus.mode === 'vr' && (!vrOverlayStatus.available || vrOverlayStatus.error) && <span className="text-amber-400">VR 组件不可用</span>}</div>}
           <div className="mt-4">
-            <HotkeyRecorder settings={overlaySettings} />
+            <div className="rounded-lg border border-border/30 bg-background/30 p-3">
+              <HotkeyRecorder settings={overlaySettings} onChange={setOverlaySettings} />
+            </div>
+          </div>
+          <div className="mt-3 rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2.5 text-[11px] leading-5 text-muted-foreground">
+            <span className="font-semibold text-foreground">VR 操作：</span>按呼出键时，浮窗始终出现在当前头部朝向的正前方，并自动消除歪头造成的画布侧倾；显示后会固定在空间中，拖动顶部标题栏可让面板围绕呼出位置做弧形移动。再次隐藏并呼出即可按新的视线方向重新定位。
           </div>
         </div>
 

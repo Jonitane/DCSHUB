@@ -4,6 +4,7 @@ import type { DcsBridge } from '@/shared/dcs-contracts'
 import type { SoftwareCatalogBridge } from '@/shared/software-catalog-contracts'
 import type { WindowControlsBridge, OverlayBridge } from '@/shared/window-contracts'
 import type { ManualLibraryBridge } from '@/shared/manual-library-contracts'
+import type { UpdateBridge } from '@/shared/update-contracts'
 
 export {}
 
@@ -16,6 +17,7 @@ declare global {
       softwareCatalog: SoftwareCatalogBridge
       manualLibrary: ManualLibraryBridge
       windowControls: WindowControlsBridge
+      updates: UpdateBridge
       overlay: OverlayBridge
     }
   }

@@ -8,11 +8,12 @@ import { ModuleManager } from '../../modules/ModuleManager'
 import { createCustomSoftwareDriver, type CustomSoftwareDefinition } from '../../integrations/custom-software/driver'
 
 interface StoredCatalog {
-  version: 2
+  version: 3
   setupCompleted: boolean
   enabledBuiltinIds: string[]
   builtinExecutableOverrides: Record<string, string>
   silentLaunchById: Record<string, boolean>
+  launchDelaySecondsById: Record<string, number>
   customSoftware: Array<CustomSoftwareDefinition & { enabled: boolean }>
 }
 
@@ -95,6 +96,7 @@ export class SoftwareCatalogService {
       kind: manifest.integrationKind === 'custom' ? 'custom' : 'builtin',
       enabled: this.moduleManager.isModuleEnabled(manifest.id),
       silentLaunch: this.data.silentLaunchById[manifest.id] !== false,
+      launchDelaySeconds: this.data.launchDelaySecondsById[manifest.id] || 0,
       removable: manifest.integrationKind === 'custom',
       executablePath: manifest.executablePath || null,
       icon: manifest.brandLogo || null,
@@ -123,6 +125,7 @@ export class SoftwareCatalogService {
     this.data.customSoftware.push(definition)
     this.moduleManager.register(createCustomSoftwareDriver(definition))
     this.data.silentLaunchById[definition.id] = true
+    this.data.launchDelaySecondsById[definition.id] = 0
     this.moduleManager.setSilentLaunchPreference(definition.id, true)
     await this.moduleManager.setModuleEnabled(definition.id, true)
     this.persist()
@@ -152,6 +155,14 @@ export class SoftwareCatalogService {
     return this.overview()
   }
 
+  setLaunchDelay(id: string, seconds: number): SoftwareCatalogOverview {
+    if (!this.builtinIds.includes(id) && !this.data.customSoftware.some((item) => item.id === id)) throw new Error('未知软件')
+    if (!Number.isFinite(seconds)) throw new Error('启动延迟必须是有效秒数')
+    this.data.launchDelaySecondsById[id] = Math.max(0, Math.min(120, Math.round(seconds)))
+    this.persist()
+    return this.overview()
+  }
+
   async useAutomaticDetection(): Promise<SoftwareCatalogOverview> {
     for (const id of this.builtinIds) {
       await this.replaceBuiltinDriver(id, null)
@@ -177,6 +188,7 @@ export class SoftwareCatalogService {
     await this.moduleManager.unregister(id)
     this.data.customSoftware = this.data.customSoftware.filter((candidate) => candidate.id !== id)
     delete this.data.silentLaunchById[id]
+    delete this.data.launchDelaySecondsById[id]
     this.persist()
     return this.overview()
   }
@@ -196,9 +208,10 @@ export class SoftwareCatalogService {
       const enabledBuiltinIds = Array.isArray(stored.enabledBuiltinIds)
         ? stored.enabledBuiltinIds.filter((id): id is string => typeof id === 'string' && this.builtinIds.includes(id))
         : [...this.builtinIds]
-      if (stored.version !== 2 && this.builtinIds.includes('srs') && !enabledBuiltinIds.includes('srs')) enabledBuiltinIds.push('srs')
+      const storedVersion = Number(stored.version)
+      if ((!Number.isFinite(storedVersion) || storedVersion < 2) && this.builtinIds.includes('srs') && !enabledBuiltinIds.includes('srs')) enabledBuiltinIds.push('srs')
       return {
-        version: 2,
+        version: 3,
         setupCompleted: stored.setupCompleted === true,
         enabledBuiltinIds,
         builtinExecutableOverrides: stored.builtinExecutableOverrides && typeof stored.builtinExecutableOverrides === 'object'
@@ -206,6 +219,11 @@ export class SoftwareCatalogService {
           : {},
         silentLaunchById: stored.silentLaunchById && typeof stored.silentLaunchById === 'object'
           ? Object.fromEntries(Object.entries(stored.silentLaunchById).filter(([id, silent]) => typeof id === 'string' && typeof silent === 'boolean'))
+          : {},
+        launchDelaySecondsById: stored.launchDelaySecondsById && typeof stored.launchDelaySecondsById === 'object'
+          ? Object.fromEntries(Object.entries(stored.launchDelaySecondsById).filter(([id, seconds]) => (
+            typeof id === 'string' && typeof seconds === 'number' && Number.isFinite(seconds)
+          )).map(([id, seconds]) => [id, Math.max(0, Math.min(120, Math.round(seconds)))]))
           : {},
         customSoftware: Array.isArray(stored.customSoftware)
           ? stored.customSoftware.filter((item): item is CustomSoftwareDefinition & { enabled: boolean } => (
@@ -225,7 +243,7 @@ export class SoftwareCatalogService {
           : [],
       }
     } catch {
-      return { version: 2, setupCompleted: false, enabledBuiltinIds: [], builtinExecutableOverrides: {}, silentLaunchById: {}, customSoftware: [] }
+      return { version: 3, setupCompleted: false, enabledBuiltinIds: [], builtinExecutableOverrides: {}, silentLaunchById: {}, launchDelaySecondsById: {}, customSoftware: [] }
     }
   }
 

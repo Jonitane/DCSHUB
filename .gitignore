@@ -16,6 +16,8 @@ release/
 build-out/
 build-out2/
 build-out3/
+build/native/
+docs/branding/
 *.tsbuildinfo
 *.local
 

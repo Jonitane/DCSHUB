@@ -49,12 +49,21 @@ export interface DeepSeekConfigurationStatus {
   visionAvailable: false
 }
 
+export interface ManualAnswerCacheStatus {
+  localEntries: number
+  onlineEntries: number
+  totalEntries: number
+  size: number
+  lastUpdatedAt: string | null
+}
+
 export interface ManualLibraryOverview {
   configured: boolean
   onboardingCompleted: boolean
   libraryPath: string | null
   documents: ManualDocumentRecord[]
   index: ManualIndexStatus
+  answerCache: ManualAnswerCacheStatus
   deepSeek: DeepSeekConfigurationStatus
 }
 
@@ -76,6 +85,7 @@ export interface ManualQuestionAnswer {
   answer: string
   sources: ManualSearchHit[]
   model: string
+  cached: boolean
 }
 
 export interface ManualOnlineSearchSource {
@@ -87,6 +97,7 @@ export interface ManualOnlineSearchAnswer {
   answer: string
   sources: ManualOnlineSearchSource[]
   model: 'deepseek-v4-pro'
+  cached: boolean
 }
 
 export interface ManualPagePreview {

@@ -35,8 +35,12 @@ async function main() {
     // onboarding lets the user opt in to the modules they actually use.
     assert.equal(catalog.overview().items[0].enabled, false)
     assert.equal(catalog.overview().items[0].silentLaunch, true)
+    assert.equal(catalog.overview().items[0].launchDelaySeconds, 0)
     assert.equal(catalog.setSilentLaunch('builtin-test', false).items[0].silentLaunch, false)
     assert.equal(catalog.setSilentLaunch('builtin-test', true).items[0].silentLaunch, true)
+    assert.equal(catalog.setLaunchDelay('builtin-test', 7).items[0].launchDelaySeconds, 7)
+    assert.equal(catalog.setLaunchDelay('builtin-test', 999).items[0].launchDelaySeconds, 120)
+    assert.equal(catalog.setLaunchDelay('builtin-test', -2).items[0].launchDelaySeconds, 0)
     await catalog.setEnabled('builtin-test', false)
     assert.equal(manager.list().length, 0)
     await catalog.setEnabled('builtin-test', true)
@@ -53,6 +57,7 @@ async function main() {
     assert.ok(custom)
     assert.equal(custom.displayName, '飞行工具')
     assert.equal(custom.enabled, true)
+    assert.equal(custom.launchDelaySeconds, 0)
     assert.equal(custom.executablePath, customExecutable)
     assert.equal((await catalog.remove(custom.id)).items.some((item) => item.id === custom.id), false)
 
