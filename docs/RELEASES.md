@@ -37,8 +37,8 @@ npm run build
 5. 仅在准备正式安装包时创建版本标签：
 
 ```powershell
-git tag V2.1.23
-git push origin V2.1.23
+git tag V2.2.0
+git push origin V2.2.0
 ```
 
 标签会触发 GitHub Actions，在 Windows 环境重新验证并构建安装程序，同时生成 SHA-256 校验文件。
