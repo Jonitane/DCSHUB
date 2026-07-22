@@ -6,6 +6,7 @@ export interface SoftwareCatalogItem {
   kind: 'builtin' | 'custom'
   enabled: boolean
   silentLaunch: boolean
+  launchDelaySeconds: number
   removable: boolean
   executablePath: string | null
   icon: string | null
@@ -23,6 +24,7 @@ export interface SoftwareCatalogBridge {
   useAutomaticDetection: () => Promise<SoftwareCatalogOverview>
   chooseBuiltinExecutable: (id: string) => Promise<SoftwareCatalogOverview | null>
   setSilentLaunch: (id: string, silent: boolean) => Promise<SoftwareCatalogOverview>
+  setLaunchDelay: (id: string, seconds: number) => Promise<SoftwareCatalogOverview>
   setEnabled: (id: string, enabled: boolean) => Promise<SoftwareCatalogOverview>
   remove: (id: string) => Promise<SoftwareCatalogOverview>
   completeInitialSetup: (enabledIds: string[]) => Promise<SoftwareCatalogOverview>

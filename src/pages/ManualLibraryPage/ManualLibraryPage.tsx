@@ -68,6 +68,12 @@ function documentSourceDetail(document: ManualDocumentRecord): string {
   return 'DCS 官方手册'
 }
 
+function formatCacheSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 function ProgressPanel({ progress }: { progress: ManualLibraryProgress }) {
   return (
     <div className="rounded-xl border border-primary/25 bg-card/90 p-4 shadow-sm">
@@ -677,6 +683,7 @@ export default function ManualLibraryPage() {
       setResponse(answer)
       setAnsweredQuestion(submittedQuestion)
       void loadPagePreviews(answer)
+      void bridge.overview().then(setOverview).catch(() => undefined)
     } catch (reason) {
       toast.error('提问失败', { description: reason instanceof Error ? reason.message : String(reason) })
     } finally {
@@ -689,6 +696,7 @@ export default function ManualLibraryPage() {
     setOperation('online-search')
     try {
       setOnlineResponse(await bridge.askOnline(answeredQuestion))
+      void bridge.overview().then(setOverview).catch(() => undefined)
     } catch (reason) {
       toast.error('在线搜索失败', { description: reason instanceof Error ? reason.message : String(reason) })
     } finally {
@@ -739,8 +747,9 @@ export default function ManualLibraryPage() {
                 <CardContent className="flex items-center gap-3 p-4">
                   <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20"><Database className="size-5 text-primary" /></div>
                   <div className="min-w-0">
-                    <p className="text-xs text-muted-foreground">索引片段</p>
-                    <p className="mt-0.5 text-lg font-semibold tabular-nums">{overview.index.chunkCount.toLocaleString()}<span className="ml-1 text-xs font-normal text-muted-foreground">chunks</span></p>
+                    <p className="text-xs text-muted-foreground">问答缓存</p>
+                    <p className="mt-0.5 text-lg font-semibold tabular-nums">{overview.answerCache.totalEntries.toLocaleString()}<span className="ml-1 text-xs font-normal text-muted-foreground">条</span></p>
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">本地 {overview.answerCache.localEntries} · 联网 {overview.answerCache.onlineEntries} · {formatCacheSize(overview.answerCache.size)}</p>
                   </div>
                 </CardContent>
               </Card>
@@ -762,8 +771,8 @@ export default function ManualLibraryPage() {
                 <textarea className={cn('min-h-28 w-full resize-y rounded-xl border border-input bg-background/55 px-4 py-3 text-sm leading-6 outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15', askFocusMode && 'min-h-32 resize-none')} value={question} onFocus={enterFocusMode} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：F/A-18C 冷启动时 INS 应该如何设置？（Enter 提问，Shift+Enter 换行）" onKeyDown={(event) => { if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.repeat) return; event.preventDefault(); if (operation === null && question.trim() && overview.deepSeek.configured && overview.index.chunkCount > 0) void ask() }} />
                 <div className="flex flex-wrap items-center justify-between gap-2"><Button variant="outline" disabled title="接口已预留；当前 DeepSeek 仅支持文字"><Camera className="size-4" />截图提问（预留）</Button><Button onClick={() => void ask()} disabled={operation !== null || !question.trim() || !overview.deepSeek.configured || overview.index.chunkCount === 0}>{operation === 'ask' ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}提问</Button></div>
                 {response && <div className="space-y-4 border-t border-border/45 pt-4">
-                  <div className="rounded-xl border border-primary/20 bg-primary/[0.045] p-4"><div className="mb-3 flex items-center gap-2 text-xs font-semibold text-primary"><Bot className="size-4" />{response.model}</div><AnswerWithPageImages response={response} previews={pagePreviews} loading={previewsLoading} onExpand={setExpandedPreview} /></div>
-                  <div className="rounded-xl border border-sky-400/20 bg-sky-500/[0.035] p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="flex items-center gap-2 text-sm font-semibold"><Globe2 className="size-4 text-sky-400" />在线搜索</p><p className="mt-1 text-xs text-muted-foreground">使用 DeepSeek V4 Pro · MAX 思考联网核对；仅在点击后调用，会产生额外耗时和 API 费用。</p></div><Button variant="outline" onClick={() => void askOnline()} disabled={operation !== null}>{operation === 'online-search' ? <LoaderCircle className="size-4 animate-spin" /> : <Globe2 className="size-4" />}{onlineResponse ? '重新搜索' : '在线搜索'}</Button></div>{onlineResponse && <div className="mt-4 border-t border-sky-400/15 pt-4"><div className="mb-3 flex items-center gap-2 text-xs font-semibold text-sky-300"><Bot className="size-4" />V4 Pro · MAX</div><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ p: ({ children }) => <p className="my-2 text-sm leading-7 text-foreground/90">{children}</p>, h2: ({ children }) => <h3 className="mb-2 mt-5 text-base font-semibold">{children}</h3>, h3: ({ children }) => <h4 className="mb-2 mt-4 text-sm font-semibold">{children}</h4>, ul: ({ children }) => <ul className="my-3 space-y-1.5 pl-5 text-sm leading-7 [list-style-type:disc] marker:text-sky-400">{children}</ul>, ol: ({ children }) => <ol className="my-3 space-y-2 pl-5 text-sm leading-7 [list-style-type:decimal] marker:text-sky-400">{children}</ol>, a: ({ href, children }) => <button type="button" className="text-sky-300 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-200" onClick={() => openOnlineSource(href)}>{children}</button> }}>{onlineResponse.answer}</ReactMarkdown>{onlineResponse.sources.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{onlineResponse.sources.map((source) => <button type="button" key={source.url} onClick={() => openOnlineSource(source.url)} className="max-w-full truncate rounded-full border border-sky-400/20 bg-sky-500/5 px-3 py-1.5 text-[11px] text-sky-200 hover:bg-sky-500/10" title={source.url}>{source.title}</button>)}</div>}</div>}</div>
+                  <div className="rounded-xl border border-primary/20 bg-primary/[0.045] p-4"><div className="mb-3 flex items-center gap-2 text-xs font-semibold text-primary"><Bot className="size-4" />{response.model}{response.cached && <Badge variant="outline" className="ml-1 border-emerald-400/25 bg-emerald-500/8 text-[10px] text-emerald-300">缓存命中</Badge>}</div><AnswerWithPageImages response={response} previews={pagePreviews} loading={previewsLoading} onExpand={setExpandedPreview} /></div>
+                  <div className="rounded-xl border border-sky-400/20 bg-sky-500/[0.035] p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="flex items-center gap-2 text-sm font-semibold"><Globe2 className="size-4 text-sky-400" />在线搜索</p><p className="mt-1 text-xs text-muted-foreground">使用 DeepSeek V4 Pro · MAX 思考联网核对；同一问题优先读取持久缓存，未命中时才产生 API 费用。</p></div><Button variant="outline" onClick={() => void askOnline()} disabled={operation !== null}>{operation === 'online-search' ? <LoaderCircle className="size-4 animate-spin" /> : <Globe2 className="size-4" />}{onlineResponse ? '重新搜索' : '在线搜索'}</Button></div>{onlineResponse && <div className="mt-4 border-t border-sky-400/15 pt-4"><div className="mb-3 flex items-center gap-2 text-xs font-semibold text-sky-300"><Bot className="size-4" />V4 Pro · MAX{onlineResponse.cached && <Badge variant="outline" className="ml-1 border-emerald-400/25 bg-emerald-500/8 text-[10px] text-emerald-300">缓存命中</Badge>}</div><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ p: ({ children }) => <p className="my-2 text-sm leading-7 text-foreground/90">{children}</p>, h2: ({ children }) => <h3 className="mb-2 mt-5 text-base font-semibold">{children}</h3>, h3: ({ children }) => <h4 className="mb-2 mt-4 text-sm font-semibold">{children}</h4>, ul: ({ children }) => <ul className="my-3 space-y-1.5 pl-5 text-sm leading-7 [list-style-type:disc] marker:text-sky-400">{children}</ul>, ol: ({ children }) => <ol className="my-3 space-y-2 pl-5 text-sm leading-7 [list-style-type:decimal] marker:text-sky-400">{children}</ol>, a: ({ href, children }) => <button type="button" className="text-sky-300 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-200" onClick={() => openOnlineSource(href)}>{children}</button> }}>{onlineResponse.answer}</ReactMarkdown>{onlineResponse.sources.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{onlineResponse.sources.map((source) => <button type="button" key={source.url} onClick={() => openOnlineSource(source.url)} className="max-w-full truncate rounded-full border border-sky-400/20 bg-sky-500/5 px-3 py-1.5 text-[11px] text-sky-200 hover:bg-sky-500/10" title={source.url}>{source.title}</button>)}</div>}</div>}</div>
                   <div><p className="mb-2 text-xs font-semibold text-muted-foreground">引用来源</p><div className="space-y-2">{response.sources.map((source, index) => <button key={source.id} type="button" className="flex w-full items-start gap-3 rounded-lg border border-border/45 bg-background/35 p-3 text-left transition-colors hover:border-primary/30 hover:bg-primary/5" onClick={() => void bridge?.openDocument(source.documentId, source.page ?? undefined)}><Badge variant="outline" className="mt-0.5 shrink-0">S{index + 1}</Badge><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{source.documentName}{source.page ? ` · 第 ${source.page} 页` : ''}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{source.excerpt}</p></div><ExternalLink className="mt-1 size-3.5 shrink-0 text-muted-foreground" /></button>)}</div></div>
                 </div>}
               </CardContent>

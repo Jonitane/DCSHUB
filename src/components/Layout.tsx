@@ -5,22 +5,28 @@ import AppSidebar from "@/components/AppSidebar";
 import Header from "@/components/Header";
 import { APP_SETTINGS_CHANGED_EVENT, applyTheme, loadAppSettings } from '@/lib/app-settings';
 import InitialSoftwareSetup from '@/components/InitialSoftwareSetup';
+import UpdatePrompt from '@/components/UpdatePrompt';
 
 export default function Layout() {
   useEffect(() => {
-    const synchronizeTheme = () => applyTheme(loadAppSettings().theme)
-    synchronizeTheme()
-    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, synchronizeTheme)
-    window.addEventListener('storage', synchronizeTheme)
+    const synchronizeSettings = () => {
+      const settings = loadAppSettings()
+      applyTheme(settings.theme)
+      void window.electronAPI?.overlay.setDisplayMode(settings.dcsLaunchMode)
+    }
+    synchronizeSettings()
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, synchronizeSettings)
+    window.addEventListener('storage', synchronizeSettings)
     return () => {
-      window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, synchronizeTheme)
-      window.removeEventListener('storage', synchronizeTheme)
+      window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, synchronizeSettings)
+      window.removeEventListener('storage', synchronizeSettings)
     }
   }, []);
 
   return (
     <SidebarProvider>
       <InitialSoftwareSetup />
+      <UpdatePrompt />
       <AppSidebar />
       <SidebarInset className="flex h-screen flex-col min-w-0 overflow-hidden">
         <Header />

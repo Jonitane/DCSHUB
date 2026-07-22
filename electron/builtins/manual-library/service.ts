@@ -308,6 +308,15 @@ function normalizeQuestionInput(raw: string): string {
   return cleaned
 }
 
+function normalizeQuestionCacheIdentity(question: string): string {
+  return question
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[?？!！。．,，;；:："“”'‘’]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 const DCS_DOMAIN_ONTOLOGY: DomainSemanticTerm[] = [
   { canonical: 'Airdrop/CARP', searchTerms: 'airdrop aerial delivery cargo drop CARP computed air release point drop zone load parachute extraction CDS', patterns: [/(?:空投|航空投送|货物投放|伞降|投放区|投放点|\bCARP\b)/i] },
   { canonical: 'Cargo/Aerial Delivery', searchTerms: 'cargo aerial delivery loadmaster ramp door extraction chute container delivery system CDS heavy equipment', patterns: [/(?:货舱|装载长|货物装载|货物投送|空运投送|\bcargo\b.*\bdelivery\b)/i] },
@@ -1046,6 +1055,7 @@ export class ManualLibraryService {
         lastIndexedAt: this.manifest.lastIndexedAt,
         lastError: this.indexError,
       },
+      answerCache: this.answerCacheStatus(),
       deepSeek: {
         configured: Boolean(this.settings.deepSeekApiKey),
         model: DEFAULT_MODEL,
@@ -1327,7 +1337,7 @@ export class ManualLibraryService {
     const cachedAnswer = this.answerCache.get(answerCacheKey)
     if (cachedAnswer) {
       if (process.env.DCSHUB_DEBUG_MANUAL === '1') console.log('[manual-library] Cache hit in', Date.now() - askStart, 'ms')
-      return structuredClone(cachedAnswer.answer)
+      return { ...structuredClone(cachedAnswer.answer), cached: true }
     }
     const retrievalStart = Date.now()
     const retrieval = await this.retrieveSources(apiKey, cleaned)
@@ -1336,13 +1346,18 @@ export class ManualLibraryService {
     const aircraftScope = retrieval.aircraftScope
     if (sources.length === 0) {
       if (retrieval.unavailableAircraft.length > 0) {
-        return {
+        const result: ManualQuestionAnswer = {
           answer: `我识别到您询问的是 ${retrieval.unavailableAircraft.join('、')}，但当前手册库中没有匹配的该机型资料。为避免给出错误操作，我没有使用其他机型的手册代替回答。请先添加对应手册后再提问。`,
           sources: [],
           model: DEFAULT_MODEL,
+          cached: false,
         }
+        this.cacheVerifiedAnswer(answerCacheKey, result)
+        return result
       }
-      return { answer: '没有在当前手册库中找到足够相关的内容。请确认手册已完成索引，或换一种说法重新提问。', sources: [], model: DEFAULT_MODEL }
+      const result: ManualQuestionAnswer = { answer: '没有在当前手册库中找到足够相关的内容。请确认手册已完成索引，或换一种说法重新提问。', sources: [], model: DEFAULT_MODEL, cached: false }
+      this.cacheVerifiedAnswer(answerCacheKey, result)
+      return result
     }
     if (process.env.DCSHUB_DEBUG_MANUAL === '1') {
       console.log(`[manual-library] Retrieval: ${timings.retrieval}ms, ${retrieval.sources.length} primary + ${retrieval.fallbackSources.flat().length} fallback sources`)
@@ -1417,7 +1432,7 @@ export class ManualLibraryService {
       && (topScoreHighEnough || hasEnoughSources)
 
     if (shouldUseDirectAnswer) {
-      const result = { answer: initialAnswer, sources: dedupSources, model: answerModel }
+      const result = { answer: initialAnswer, sources: dedupSources, model: answerModel, cached: false }
       this.cacheVerifiedAnswer(answerCacheKey, result)
       if (process.env.DCSHUB_DEBUG_MANUAL === '1') console.log(`[manual-library] Total (direct flash): ${Date.now() - askStart}ms`, timings)
       return result
@@ -1426,13 +1441,13 @@ export class ManualLibraryService {
       const auditStart = Date.now()
       const answer = await this.auditProceduralAnswer(apiKey, cleaned, context, initialAnswer, dedupSources, evidenceBoundary)
       timings.audit = Date.now() - auditStart
-      const result = { answer, sources: dedupSources, model: answerModel }
+      const result = { answer, sources: dedupSources, model: answerModel, cached: false }
       this.cacheVerifiedAnswer(answerCacheKey, result)
       if (process.env.DCSHUB_DEBUG_MANUAL === '1') console.log(`[manual-library] Audit: ${timings.audit}ms, total: ${Date.now() - askStart}ms`, timings)
       return result
     } catch (error) {
       if (process.env.DCSHUB_DEBUG_MANUAL === '1') console.warn('[manual-library] Audit rejected, using direct answer:', error)
-      const result = { answer: initialAnswer, sources: dedupSources, model: answerModel }
+      const result = { answer: initialAnswer, sources: dedupSources, model: answerModel, cached: false }
       this.cacheVerifiedAnswer(answerCacheKey, result)
       return result
     }
@@ -2037,7 +2052,7 @@ export class ManualLibraryService {
     const cached = this.onlineAnswerCache.get(cacheKey)
     if (cached) {
       if (process.env.DCSHUB_DEBUG_MANUAL === '1') console.log('[manual-library] Online cache hit')
-      return structuredClone(cached.answer)
+      return { ...structuredClone(cached.answer), cached: true }
     }
     const apiKey = this.readApiKey()
     const response = await this.fetchWithTimeout('https://api.deepseek.com/anthropic/v1/messages', {
@@ -2075,7 +2090,7 @@ export class ManualLibraryService {
     visit(payload.content)
     const answer = textBlocks.join('\n\n').trim().replace(/\n{3,}/g, '\n\n')
     if (!answer) throw new Error('DeepSeek 在线搜索没有返回可用答案')
-    const result = { answer, sources: [...sources.values()].slice(0, 20), model: ONLINE_SEARCH_MODEL }
+    const result = { answer, sources: [...sources.values()].slice(0, 20), model: ONLINE_SEARCH_MODEL, cached: false }
     this.cacheOnlineAnswer(cacheKey, result)
     return result
   }
@@ -2616,6 +2631,25 @@ export class ManualLibraryService {
     return total
   }
 
+  private answerCacheStatus(): ManualLibraryOverview['answerCache'] {
+    let size = 0
+    for (const cachePath of [this.answerCachePath, this.onlineAnswerCachePath]) {
+      try { size += fs.statSync(cachePath).size } catch { /* Cache has not been created yet. */ }
+    }
+    const savedTimes = [...this.answerCache.values(), ...this.onlineAnswerCache.values()]
+      .map((entry) => Date.parse(entry.savedAt))
+      .filter(Number.isFinite)
+    const localEntries = this.answerCache.size
+    const onlineEntries = this.onlineAnswerCache.size
+    return {
+      localEntries,
+      onlineEntries,
+      totalEntries: localEntries + onlineEntries,
+      size,
+      lastUpdatedAt: savedTimes.length > 0 ? new Date(Math.max(...savedTimes)).toISOString() : null,
+    }
+  }
+
   private trimPreviewCache(currentPath: string): void {
     try {
       const entries = fs.readdirSync(this.pagePreviewCachePath, { withFileTypes: true })
@@ -2643,7 +2677,7 @@ export class ManualLibraryService {
       DEFAULT_MODEL,
       this.manifest.lastIndexedAt || 'no-index',
       detectQuestionLanguage(question),
-      question.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim(),
+      normalizeQuestionCacheIdentity(question),
     ].join('\n')).digest('hex')
   }
 
@@ -2664,7 +2698,7 @@ export class ManualLibraryService {
 
   private cacheVerifiedAnswer(key: string, answer: ManualQuestionAnswer): void {
     if (this.answerCache.has(key)) this.answerCache.delete(key)
-    this.answerCache.set(key, { key, savedAt: new Date().toISOString(), answer })
+    this.answerCache.set(key, { key, savedAt: new Date().toISOString(), answer: { ...answer, cached: false } })
     while (this.answerCache.size > MAX_ANSWER_CACHE_ENTRIES) this.answerCache.delete(this.answerCache.keys().next().value as string)
     this.saveAnswerCache()
   }
@@ -2679,7 +2713,7 @@ export class ManualLibraryService {
       ONLINE_ANSWER_CACHE_VERSION,
       ONLINE_SEARCH_MODEL,
       detectQuestionLanguage(question),
-      question.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim(),
+      normalizeQuestionCacheIdentity(question),
     ].join('\n')).digest('hex')
   }
 
@@ -2700,7 +2734,7 @@ export class ManualLibraryService {
 
   private cacheOnlineAnswer(key: string, answer: ManualOnlineSearchAnswer): void {
     if (this.onlineAnswerCache.has(key)) this.onlineAnswerCache.delete(key)
-    this.onlineAnswerCache.set(key, { key, savedAt: new Date().toISOString(), answer })
+    this.onlineAnswerCache.set(key, { key, savedAt: new Date().toISOString(), answer: { ...answer, cached: false } })
     while (this.onlineAnswerCache.size > MAX_ONLINE_ANSWER_CACHE_ENTRIES) this.onlineAnswerCache.delete(this.onlineAnswerCache.keys().next().value as string)
     this.saveOnlineAnswerCache()
   }

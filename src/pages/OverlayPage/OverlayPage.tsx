@@ -21,12 +21,18 @@ import type {
   ManualQuestionAnswer,
   ManualOnlineSearchAnswer,
 } from '@/shared/manual-library-contracts'
+import type { OverlayDisplayMode, OverlaySettings } from '@/shared/window-contracts'
+
+function formatOverlayHotkey(hotkey: string): string {
+  return hotkey.replace(/^num([0-9])$/i, 'Num $1')
+}
 
 function processTextWithCitations(
   text: string,
   sourcePreviews: Array<ManualPagePreview | undefined>,
   activeSource: number | null,
   onCitationClick: (sourceNumber: number) => void,
+  onCitationHover: (sourceNumber: number) => void,
 ): React.ReactNode[] {
   const parts: React.ReactNode[] = []
   const regex = /\[S(\d+)\]/g
@@ -47,6 +53,7 @@ function processTextWithCitations(
         key={`cite-${key++}`}
         type="button"
         onClick={() => validSource && onCitationClick(sourceNumber)}
+        onMouseEnter={() => validSource && onCitationHover(sourceNumber)}
         className={cn(
           'mx-0.5 inline-flex items-center rounded px-1 py-0 text-[0.7em] font-bold transition-all cursor-pointer align-baseline ring-1',
           activeSource === sourceNumber
@@ -105,6 +112,8 @@ function OverlayAnswer({
   const [currentPreviewIndex, setCurrentPreviewIndex] = useState(0)
   const [activeCitation, setActiveCitation] = useState<number | null>(null)
   const [expandedPreview, setExpandedPreview] = useState(false)
+  const imagePanelRef = useRef<HTMLElement>(null)
+  const wheelTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
     setCurrentPreviewIndex(0)
@@ -113,6 +122,19 @@ function OverlayAnswer({
   }, [response])
 
   const jumpToSource = useCallback((sourceNumber: number) => {
+    const source = response.sources[sourceNumber - 1]
+    if (!source?.page) return
+    const previewKey = `${source.documentId}:${source.page}`
+    const index = allPreviewsWithSources.findIndex(
+      (item) => `${item.preview.documentId}:${item.preview.page}` === previewKey
+    )
+    if (index >= 0) {
+      setCurrentPreviewIndex(index)
+      setActiveCitation(sourceNumber)
+    }
+  }, [response.sources, allPreviewsWithSources])
+
+  const previewSourceOnHover = useCallback((sourceNumber: number) => {
     const source = response.sources[sourceNumber - 1]
     if (!source?.page) return
     const previewKey = `${source.documentId}:${source.page}`
@@ -138,12 +160,12 @@ function OverlayAnswer({
   const createMarkdownComponents = () => {
     const processChildren = (children: React.ReactNode): React.ReactNode => {
       if (typeof children === 'string') {
-        return processTextWithCitations(children, sourcePreviews, activeCitation, jumpToSource)
+        return processTextWithCitations(children, sourcePreviews, activeCitation, jumpToSource, previewSourceOnHover)
       }
       if (Array.isArray(children)) {
         return children.map((child, i) => {
           if (typeof child === 'string') {
-            return <Fragment key={i}>{processTextWithCitations(child, sourcePreviews, activeCitation, jumpToSource)}</Fragment>
+            return <Fragment key={i}>{processTextWithCitations(child, sourcePreviews, activeCitation, jumpToSource, previewSourceOnHover)}</Fragment>
           }
           return child
         })
@@ -175,12 +197,41 @@ function OverlayAnswer({
   const current = allPreviewsWithSources[currentPreviewIndex]
   const hasImages = allPreviewsWithSources.length > 0
 
-  const goToPrev = () => setCurrentPreviewIndex(Math.max(0, currentPreviewIndex - 1))
-  const goToNext = () => setCurrentPreviewIndex(Math.min(allPreviewsWithSources.length - 1, currentPreviewIndex + 1))
+  const goToPrev = useCallback(() => {
+    setCurrentPreviewIndex((currentIndex) => Math.max(0, currentIndex - 1))
+  }, [])
+  const goToNext = useCallback(() => {
+    setCurrentPreviewIndex((currentIndex) => Math.min(allPreviewsWithSources.length - 1, currentIndex + 1))
+  }, [allPreviewsWithSources.length])
+
+  const queueWheelPage = useCallback((deltaY: number) => {
+    if (Math.abs(deltaY) < 15) return
+    if (wheelTimeoutRef.current) window.clearTimeout(wheelTimeoutRef.current)
+    wheelTimeoutRef.current = window.setTimeout(() => {
+      if (deltaY > 0) goToNext()
+      else goToPrev()
+    }, 80)
+  }, [goToNext, goToPrev])
+
+  useEffect(() => {
+    const panel = imagePanelRef.current
+    if (!panel) return
+    const handleWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaY) < 15) return
+      event.preventDefault()
+      event.stopPropagation()
+      queueWheelPage(event.deltaY)
+    }
+    panel.addEventListener('wheel', handleWheel, { passive: false })
+    return () => {
+      panel.removeEventListener('wheel', handleWheel)
+      if (wheelTimeoutRef.current) window.clearTimeout(wheelTimeoutRef.current)
+    }
+  }, [hasImages, queueWheelPage])
 
   return (
-    <div ref={answerContainerRef} className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+    <div ref={answerContainerRef} className="flex h-full min-h-0 gap-3">
+      <div className="min-w-0 flex-1 overflow-y-auto pr-2">
         <div className="space-y-0.5 pb-2">
           {paragraphs.map((paragraph, paragraphIndex) => (
             <div key={`${paragraphIndex}:${paragraph.slice(0, 20)}`} className="min-w-0">
@@ -197,9 +248,9 @@ function OverlayAnswer({
         )}
       </div>
 
-      {hasImages && !expandedPreview && (
-        <div className="mt-2 shrink-0 border-t border-border/40 pt-2">
-          <div className="flex items-center justify-between gap-1 mb-1.5">
+      {hasImages && (
+        <aside ref={imagePanelRef} className="flex w-[350px] min-h-0 shrink-0 flex-col overflow-hidden rounded-xl border border-primary/20 bg-background/60" title="悬停后滚动滚轮切换页面">
+          <div className="flex shrink-0 items-center justify-between gap-1 border-b border-border/40 px-2.5 py-2">
             <div className="flex items-center gap-1">
               {allPreviewsWithSources.length > 1 && (
                 <>
@@ -226,22 +277,78 @@ function OverlayAnswer({
               <Maximize2 className="size-3" />放大
             </button>
           </div>
-          <div className="relative bg-white/95 rounded overflow-hidden" style={{ maxHeight: '180px' }}>
-            {current && (
-              <img src={current.preview.imageDataUrl} alt="" className="mx-auto max-h-[180px] w-auto object-contain" />
-            )}
+          <div className="min-h-0 flex-1 bg-white/95 p-2">
+            <button
+              type="button"
+              className="group relative flex h-full w-full cursor-zoom-in items-center justify-center overflow-hidden"
+              onClick={() => current && setExpandedPreview(true)}
+              title="点击放大"
+            >
+              {current && (
+                <img
+                  src={current.preview.imageDataUrl}
+                  alt={`${current.preview.documentName} 第 ${current.preview.page} 页`}
+                  className="max-h-full max-w-full object-contain transition-transform group-hover:scale-[1.01]"
+                />
+              )}
+              <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover:bg-black/5 group-hover:opacity-100">
+                <span className="flex items-center gap-1 rounded-full bg-black/65 px-3 py-1.5 text-[10px] font-medium text-white">
+                  <Maximize2 className="size-3" />点击放大
+                </span>
+              </span>
+            </button>
           </div>
-        </div>
+          {current && (
+            <div className="shrink-0 border-t border-border/40 px-2.5 py-1.5 text-[10px] text-muted-foreground">
+              <span className="font-semibold text-primary">S{current.sourceNumber}</span>
+              <span className="mx-1">·</span>
+              <span className="truncate">第 {current.preview.page} 页</span>
+            </div>
+          )}
+          {allPreviewsWithSources.length > 1 && (
+            <div className="flex shrink-0 gap-1 overflow-x-auto border-t border-border/40 p-1.5">
+              {allPreviewsWithSources.map((item, index) => (
+                <button
+                  key={`${item.preview.documentId}:${item.preview.page}:thumb`}
+                  type="button"
+                  onClick={() => setCurrentPreviewIndex(index)}
+                  className={cn(
+                    'relative shrink-0 overflow-hidden rounded border-2 transition-all',
+                    index === currentPreviewIndex ? 'border-primary shadow-sm shadow-primary/30' : 'border-transparent opacity-50 hover:opacity-90'
+                  )}
+                >
+                  <img src={item.preview.imageDataUrl} alt={`S${item.sourceNumber}`} className="h-9 w-auto bg-white object-contain" />
+                  <span className="absolute inset-x-0 bottom-0 bg-black/65 text-center text-[8px] font-bold text-white">S{item.sourceNumber}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </aside>
       )}
 
       {expandedPreview && current && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick={() => setExpandedPreview(false)}>
-          <div className="relative max-h-[95vh] max-w-[95vw]" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setExpandedPreview(false)}
+          onWheel={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            queueWheelPage(event.deltaY)
+          }}
+          title="滚动滚轮切换页面 · 点击图片关闭"
+        >
+          <div className="relative flex max-h-full max-w-full items-center justify-center">
             <button type="button" onClick={() => setExpandedPreview(false)}
-              className="absolute -top-8 right-0 flex items-center gap-1 rounded px-2 py-1 text-xs text-white/80 hover:text-white">
+              className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-lg bg-black/75 px-2.5 py-1.5 text-xs text-white/90 shadow-lg hover:bg-black/90 hover:text-white">
               <X className="size-3.5" />关闭
             </button>
-            <img src={current.preview.imageDataUrl} alt="" className="max-h-[90vh] max-w-[90vw] object-contain rounded" />
+            <img
+              src={current.preview.imageDataUrl}
+              alt=""
+              onClick={() => setExpandedPreview(false)}
+              className="max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] cursor-zoom-out rounded object-contain"
+              title="点击图片关闭"
+            />
           </div>
         </div>
       )}
@@ -259,7 +366,7 @@ function OverlayOnlineAnswer({ response }: { response: ManualOnlineSearchAnswer 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-2 flex shrink-0 items-center gap-1.5 text-[10px] font-semibold text-cyan-400">
-        <Globe className="size-3.5" />联网搜索 · {response.model}
+        <Globe className="size-3.5" />联网搜索 · {response.model}{response.cached && <span className="rounded border border-emerald-400/25 bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300">缓存命中</span>}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto pr-1 text-[13px] leading-6 text-white/85">
         <div className="space-y-2 prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:text-white prose-strong:text-white prose-code:text-cyan-200 prose-code:bg-white/10 prose-code:px-1 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-a:text-cyan-300 hover:prose-a:text-cyan-200 prose-pre:bg-white/5 prose-pre:border prose-pre:border-white/10">
@@ -298,6 +405,9 @@ export default function OverlayPage() {
   const [askingOnline, setAskingOnline] = useState(false)
   const [pagePreviews, setPagePreviews] = useState<ManualPagePreview[]>([])
   const [previewsLoading, setPreviewsLoading] = useState(false)
+  const [displayMode, setDisplayMode] = useState<OverlayDisplayMode>('desktop')
+  const [runtimeSettings, setRuntimeSettings] = useState<OverlaySettings | null>(null)
+  const vrPointerRef = useRef<HTMLSpanElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -332,10 +442,18 @@ export default function OverlayPage() {
 
   useEffect(() => {
     if (!overlay) return
+    void overlay.getSettings().then(setRuntimeSettings).catch(() => undefined)
     const unsub = overlay.onFocusInput(() => {
+      void overlay.getSettings().then(setRuntimeSettings).catch(() => undefined)
       setTimeout(() => textareaRef.current?.focus(), 50)
     })
     return unsub
+  }, [overlay])
+
+  useEffect(() => {
+    if (!overlay) return
+    void overlay.getDisplayMode().then((status) => setDisplayMode(status.mode)).catch(() => undefined)
+    return overlay.onDisplayModeChanged((status) => setDisplayMode(status.mode))
   }, [overlay])
 
   const loadPagePreviews = useCallback(async (answer: ManualQuestionAnswer) => {
@@ -364,12 +482,14 @@ export default function OverlayPage() {
       const answer = await bridge.ask(q)
       setResponse(answer)
       void loadPagePreviews(answer)
+      void bridge.overview().then(setOverview).catch(() => undefined)
     } catch {
       /* overlay silently ignores errors */
     } finally {
       setAsking(false)
       setQuestion('')
-      setTimeout(() => textareaRef.current?.focus(), 50)
+      if (displayMode === 'vr') void overlay?.endTextInput()
+      else setTimeout(() => textareaRef.current?.focus(), 50)
     }
   }
 
@@ -383,12 +503,14 @@ export default function OverlayPage() {
     try {
       const answer = await bridge.askOnline(q)
       setOnlineResponse(answer)
+      void bridge.overview().then(setOverview).catch(() => undefined)
     } catch {
       /* overlay silently ignores errors */
     } finally {
       setAskingOnline(false)
       setQuestion('')
-      setTimeout(() => textareaRef.current?.focus(), 50)
+      if (displayMode === 'vr') void overlay?.endTextInput()
+      else setTimeout(() => textareaRef.current?.focus(), 50)
     }
   }
 
@@ -396,25 +518,25 @@ export default function OverlayPage() {
 
   const configured = overview?.configured && overview.deepSeek.configured && overview.index.chunkCount > 0
 
-  const panelWidth = 680
-  const panelMaxHeight = 'min(780px, calc(100vh - 80px))'
+  // Both modes fill their own host window. Electron gives desktop mode a compact
+  // movable window and VR mode a 1200x750 capture surface.
+  const panelWidth = '100vw'
+  const panelMaxHeight = '100vh'
 
-  const [panelPos, setPanelPos] = useState({ x: 0, y: 0 })
-  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
+  const dragRef = useRef<{ lastX: number; lastY: number } | null>(null)
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
+    if (displayMode !== 'vr') return
     e.preventDefault()
-    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: panelPos.x, origY: panelPos.y }
+    dragRef.current = { lastX: e.clientX, lastY: e.clientY }
     const onMove = (ev: MouseEvent) => {
       if (!dragRef.current) return
-      const dx = ev.clientX - dragRef.current.startX
-      const dy = ev.clientY - dragRef.current.startY
-      const maxX = Math.floor(window.innerWidth / 2 - 40)
-      const maxY = Math.floor(window.innerHeight / 2 - 40)
-      const nextX = Math.max(-maxX, Math.min(maxX, dragRef.current.origX + dx))
-      const nextY = Math.max(-maxY, Math.min(maxY, dragRef.current.origY + dy))
-      setPanelPos({ x: nextX, y: nextY })
+      const dx = ev.clientX - dragRef.current.lastX
+      const dy = ev.clientY - dragRef.current.lastY
+      dragRef.current.lastX = ev.clientX
+      dragRef.current.lastY = ev.clientY
+      void overlay?.moveVr(dx / Math.max(1, window.innerWidth), -dy / Math.max(1, window.innerHeight))
     }
     const onUp = () => {
       dragRef.current = null
@@ -423,31 +545,48 @@ export default function OverlayPage() {
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [panelPos])
-
-  const onDoubleClickHeader = useCallback(() => {
-    setPanelPos({ x: 0, y: 0 })
-  }, [])
+  }, [displayMode, overlay])
 
   return (
     <div
       className="flex h-screen w-screen items-center justify-center overflow-hidden"
       style={{ background: 'transparent' }}
+      onPointerUpCapture={(event) => {
+        if (displayMode !== 'vr') return
+        const target = event.target as HTMLElement
+        if (!target.closest('[data-overlay-text-input]')) {
+          window.setTimeout(() => { void overlay?.endTextInput() }, 0)
+        }
+      }}
+      onMouseMove={(event) => {
+        if (displayMode !== 'vr' || !vrPointerRef.current) return
+        vrPointerRef.current.style.display = 'block'
+        vrPointerRef.current.style.left = `${event.clientX}px`
+        vrPointerRef.current.style.top = `${event.clientY}px`
+      }}
+      onMouseLeave={() => {
+        if (vrPointerRef.current) vrPointerRef.current.style.display = 'none'
+      }}
     >
+      {displayMode === 'vr' && <span
+        ref={vrPointerRef}
+        aria-hidden="true"
+        className="pointer-events-none fixed z-[999] hidden size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-primary shadow-[0_0_10px_rgba(255,120,20,0.85)]"
+      />}
       <div
-        className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/80 backdrop-blur-xl shadow-2xl"
+        className={`flex flex-col overflow-hidden border border-white/10 bg-black/80 backdrop-blur-xl shadow-2xl ${displayMode === 'desktop' ? 'rounded-2xl' : ''}`}
         style={{
           width: panelWidth,
+          height: panelMaxHeight,
           maxHeight: panelMaxHeight,
-          transform: `translate(${panelPos.x}px, ${panelPos.y}px)`,
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
       <div
         className="flex shrink-0 cursor-grab items-center justify-between border-b border-white/10 px-4 py-2.5 active:cursor-grabbing select-none"
+        style={{ WebkitAppRegion: displayMode === 'desktop' ? 'drag' : 'no-drag' } as React.CSSProperties}
         onMouseDown={onDragStart}
-        onDoubleClick={onDoubleClickHeader}
-        title="拖动可移动面板 · 双击复位"
+        title={displayMode === 'vr' ? '拖动可移动并固定 VR 面板位置' : '拖动可移动面板'}
       >
         <div className="flex items-center gap-2">
           <GripVertical className="size-4 text-white/30" />
@@ -455,12 +594,18 @@ export default function OverlayPage() {
           <span className="text-sm font-semibold text-white/90">超级手册</span>
           {overview && (
             <span className="text-[10px] text-white/40 tabular-nums">
-              {overview.index.chunkCount.toLocaleString()} 片段
+              缓存 {overview.answerCache.totalEntries.toLocaleString()} 条 · 本地 {overview.answerCache.localEntries} / 联网 {overview.answerCache.onlineEntries}
+            </span>
+          )}
+          {displayMode === 'vr' && runtimeSettings && (
+            <span className="rounded bg-white/5 px-2 py-0.5 text-[10px] text-white/45">
+              {formatOverlayHotkey(runtimeSettings.hotkey)} 呼出/隐藏 · 每次呼出自动回中
             </span>
           )}
         </div>
         <button type="button" onClick={close}
           className="flex size-7 items-center justify-center rounded-lg text-white/50 hover:bg-white/10 hover:text-white transition-colors"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onMouseDown={(e) => e.stopPropagation()}
           title="关闭 (Esc)">
           <X className="size-4" />
@@ -486,7 +631,7 @@ export default function OverlayPage() {
         ) : response ? (
           <div className="flex h-full min-h-0 flex-col">
             <div className="mb-2 flex shrink-0 items-center gap-1.5 text-[10px] font-semibold text-primary/90">
-              <Bot className="size-3.5" />{response.model}
+              <Bot className="size-3.5" />{response.model}{response.cached && <span className="rounded border border-emerald-400/25 bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300">缓存命中</span>}
             </div>
             <div className="min-h-0 flex-1">
               <OverlayAnswer response={response} previews={pagePreviews} loading={previewsLoading} />
@@ -506,6 +651,10 @@ export default function OverlayPage() {
           <div className="flex items-end gap-2">
             <textarea
               ref={textareaRef}
+              data-overlay-text-input
+              onPointerDown={() => {
+                if (displayMode === 'vr') void overlay?.beginTextInput()
+              }}
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               onKeyDown={(e) => {

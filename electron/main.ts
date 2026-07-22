@@ -16,7 +16,10 @@ import { DcsLaunchService } from './builtins/dcs-launch/service'
 import type { ModManagerSettings } from '../src/shared/mod-manager-contracts'
 import { SoftwareCatalogService } from './builtins/software-catalog/service'
 import { ManualLibraryService } from './builtins/manual-library/service'
-import { UPDATE_DOWNLOAD_URL } from '../src/shared/app-meta'
+import { UpdateService } from './builtins/update/service'
+import { VrOverlayService } from './builtins/vr-overlay/service'
+import { APP_VERSION, UPDATE_DOWNLOAD_URL } from '../src/shared/app-meta'
+import type { OverlayDisplayMode, VrOverlayStatus } from '../src/shared/window-contracts'
 
 interface OverlaySettings {
   hotkey: string
@@ -67,8 +70,15 @@ let modManager: ModManagerService | null = null
 let dcsLaunch: DcsLaunchService | null = null
 let softwareCatalog: SoftwareCatalogService | null = null
 let manualLibrary: ManualLibraryService | null = null
+let updateService: UpdateService | null = null
+let vrOverlay: VrOverlayService | null = null
 let overlaySettings: OverlaySettings = { ...DEFAULT_OVERLAY_SETTINGS }
+let overlayDisplayMode: OverlayDisplayMode = 'desktop'
 let overlayUserVisible = false
+let vrCaptureTimer: ReturnType<typeof setInterval> | null = null
+let vrCaptureInFlight = false
+let vrCaptureEpoch = 0
+const VR_CAPTURE_INTERVAL_MS = 16
 let dcsProcessRunning = false
 let dcsCheckTimer: ReturnType<typeof setInterval> | null = null
 const manualViewerWindows = new Set<BrowserWindow>()
@@ -120,11 +130,28 @@ function parseElectronAccelerator(accelerator: string): ParsedHotkey | null {
   if (/^f([1-9]|1[0-9]|2[0-4])$/.test(key)) vkCode = 0x6F + parseInt(key.slice(1), 10)
   else if (/^[a-z]$/.test(key)) vkCode = key.toUpperCase().charCodeAt(0)
   else if (/^[0-9]$/.test(key)) vkCode = 0x30 + parseInt(key, 10)
+  else if (/^num[0-9]$/.test(key)) vkCode = 0x60 + parseInt(key.slice(3), 10)
+  else if (key === 'nummult') vkCode = 0x6A
+  else if (key === 'numadd') vkCode = 0x6B
+  else if (key === 'numsub') vkCode = 0x6D
+  else if (key === 'numdec') vkCode = 0x6E
+  else if (key === 'numdiv') vkCode = 0x6F
   else if (key === 'escape' || key === 'esc') vkCode = 0x1B
   else if (key === 'tab') vkCode = 0x09
   else if (key === 'space' || key === 'spacebar') vkCode = 0x20
   else if (key === 'enter' || key === 'return') vkCode = 0x0D
   else if (key === 'backspace') vkCode = 0x08
+  else if (key === 'up') vkCode = 0x26
+  else if (key === 'down') vkCode = 0x28
+  else if (key === 'left') vkCode = 0x25
+  else if (key === 'right') vkCode = 0x27
+  else if (key === 'delete') vkCode = 0x2E
+  else if (key === 'insert') vkCode = 0x2D
+  else if (key === 'home') vkCode = 0x24
+  else if (key === 'end') vkCode = 0x23
+  else if (key === 'pageup') vkCode = 0x21
+  else if (key === 'pagedown') vkCode = 0x22
+  else if (key === 'capslock') vkCode = 0x14
   else return null
   return { vkCode, mods }
 }
@@ -133,7 +160,7 @@ function isDcsProcessRunning(): boolean {
   try {
     const result = execFileSync('powershell', [
       '-NoProfile', '-Command',
-      'Get-Process | Where-Object { $_.ProcessName -like "DCS*" -or $_.ProcessName -like "Digital Combat Simulator*" } | Select-Object -First 1 Id'
+      'Get-Process -Name "DCS" -ErrorAction SilentlyContinue | Select-Object -First 1 Id'
     ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 2000 }).trim()
     return result.length > 0
   } catch {
@@ -142,21 +169,27 @@ function isDcsProcessRunning(): boolean {
 }
 
 let lastOverlayToggleAt = 0
+const OVERLAY_TOGGLE_DEBOUNCE_MS = 250
 function toggleOverlay(): void {
   if (!overlaySettings.enabled) return
   const now = Date.now()
-  if (now - lastOverlayToggleAt < 150) return
+  if (now - lastOverlayToggleAt < OVERLAY_TOGGLE_DEBOUNCE_MS) return
   lastOverlayToggleAt = now
   if (overlayUserVisible) {
-    hideOverlay()
+    setOverlayVisibility(false)
   } else {
     if (!dcsProcessRunning && !isDcsProcessRunning()) {
       dcsProcessRunning = false
       return
     }
     dcsProcessRunning = true
-    showOverlay()
+    setOverlayVisibility(true)
   }
+}
+
+function setOverlayVisibility(visible: boolean): void {
+  if (visible) showOverlay()
+  else hideOverlay()
 }
 
 function showOverlay(): void {
@@ -166,18 +199,173 @@ function showOverlay(): void {
   overlayWin.setAlwaysOnTop(true, 'screen-saver')
   overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   overlayWin.setIgnoreMouseEvents(false)
-  overlayWin.show()
-  overlayWin.focus()
-  overlayWin.webContents.focus()
-  overlayWin.webContents.send('overlay:focus-input')
+  overlayWin.setOpacity(overlayDisplayMode === 'vr' ? 0.01 : overlaySettings.opacity)
+  if (overlayDisplayMode === 'vr') {
+    // showInactive preserves DCS focus on invocation, while keeping the host
+    // window focusable so mouse dragging, controls and explicit text input work.
+    overlayWin.setFocusable(true)
+    overlayWin.showInactive()
+    vrOverlay?.beginFrames()
+    vrOverlay?.requestRecenter()
+    startVrFrameCapture()
+  } else {
+    overlayWin.setFocusable(true)
+    overlayWin.show()
+    overlayWin.focus()
+    overlayWin.webContents.focus()
+    overlayWin.webContents.send('overlay:focus-input')
+  }
 }
 
 function hideOverlay(): void {
   overlayUserVisible = false
+  stopVrFrameCapture()
+  vrOverlay?.publishInactive()
   if (overlayWin && !overlayWin.isDestroyed()) {
     overlayWin.setIgnoreMouseEvents(true, { forward: true })
+    overlayWin.blur()
     overlayWin.hide()
   }
+  focusDcsWindow()
+}
+
+function stopVrFrameCapture(): void {
+  vrCaptureEpoch += 1
+  if (vrCaptureTimer) {
+    clearInterval(vrCaptureTimer)
+    vrCaptureTimer = null
+  }
+  vrCaptureInFlight = false
+}
+
+async function captureVrOverlayFrame(): Promise<void> {
+  if (vrCaptureInFlight || overlayDisplayMode !== 'vr' || !overlayUserVisible || !overlayWin || overlayWin.isDestroyed()) return
+  const captureEpoch = vrCaptureEpoch
+  vrCaptureInFlight = true
+  try {
+    const source = await overlayWin.webContents.capturePage()
+    if (captureEpoch !== vrCaptureEpoch || overlayDisplayMode !== 'vr' || !overlayUserVisible || !overlayWin || overlayWin.isDestroyed()) return
+    if (source.isEmpty()) return
+    const sourceSize = source.getSize()
+    const scale = Math.min(1, 1280 / sourceSize.width, 900 / sourceSize.height)
+    const width = Math.max(1, Math.round(sourceSize.width * scale))
+    const height = Math.max(1, Math.round(sourceSize.height * scale))
+    const frame = scale < 1 ? source.resize({ width, height, quality: 'best' }) : source
+    if (captureEpoch !== vrCaptureEpoch || !overlayUserVisible) return
+    vrOverlay?.publishFrame(frame.toBitmap(), width, height)
+  } catch { /* the next capture tick retries */ }
+  finally {
+    // A stale capture must not reset the in-flight state of a newer session.
+    if (captureEpoch === vrCaptureEpoch) vrCaptureInFlight = false
+  }
+}
+
+function startVrFrameCapture(): void {
+  if (vrCaptureTimer || overlayDisplayMode !== 'vr' || !overlayUserVisible) return
+  void captureVrOverlayFrame()
+  // Capture as quickly as Chromium can supply frames. The in-flight guard keeps
+  // slower machines from queueing work while allowing capable systems to reach 60 FPS.
+  vrCaptureTimer = setInterval(() => { void captureVrOverlayFrame() }, VR_CAPTURE_INTERVAL_MS)
+  vrCaptureTimer.unref()
+}
+
+function configureOverlayWindowForMode(mode: OverlayDisplayMode): void {
+  if (!overlayWin || overlayWin.isDestroyed()) return
+  overlayWin.setFocusable(true)
+  overlayWin.setOpacity(mode === 'vr' && overlayUserVisible ? 0.01 : overlaySettings.opacity)
+  const display = screen.getPrimaryDisplay()
+  if (mode === 'desktop') {
+    const width = Math.min(display.workArea.width, overlaySettings.width)
+    const height = Math.min(display.workArea.height, overlaySettings.height)
+    overlayWin.setBounds({
+      x: display.workArea.x + Math.round((display.workArea.width - width) / 2),
+      y: display.workArea.y + Math.round((display.workArea.height - height) / 2),
+      width,
+      height,
+    })
+    return
+  }
+  const width = Math.min(display.workArea.width, 1200)
+  const height = Math.min(display.workArea.height, 750)
+  overlayWin.setBounds({
+    x: display.workArea.x + Math.round((display.workArea.width - width) / 2),
+    y: display.workArea.y + Math.round((display.workArea.height - height) / 2),
+    width,
+    height,
+  })
+}
+
+function focusDcsWindow(): void {
+  if (process.platform !== 'win32') return
+  const script = `
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class DcsHubFocusTarget {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+  public static void Restore(IntPtr target) {
+    if (target == IntPtr.Zero) return;
+    IntPtr foreground = GetForegroundWindow();
+    uint foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, IntPtr.Zero);
+    uint currentThread = GetCurrentThreadId();
+    bool attached = foregroundThread != 0 && foregroundThread != currentThread && AttachThreadInput(currentThread, foregroundThread, true);
+    try {
+      ShowWindowAsync(target, 5);
+      BringWindowToTop(target);
+      SetForegroundWindow(target);
+    } finally {
+      if (attached) AttachThreadInput(currentThread, foregroundThread, false);
+    }
+  }
+}
+'@
+$process = Get-Process -Name 'DCS' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+if ($process) { [DcsHubFocusTarget]::Restore($process.MainWindowHandle) }
+`
+  try {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], {
+      windowsHide: true,
+      stdio: 'ignore',
+      detached: false,
+    })
+    child.unref()
+  } catch { /* focus restoration is best effort */ }
+}
+
+function beginVrOverlayTextInput(): void {
+  if (overlayDisplayMode !== 'vr' || !overlayUserVisible || !overlayWin || overlayWin.isDestroyed()) return
+  overlayWin.setFocusable(true)
+  overlayWin.focus()
+  overlayWin.webContents.focus()
+}
+
+function endVrOverlayTextInput(): void {
+  if (overlayDisplayMode !== 'vr' || !overlayWin || overlayWin.isDestroyed()) return
+  // Keep the window focusable for the next interaction. Blurring here avoids
+  // breaking subsequent pointer events, then explicitly returns focus to DCS.
+  overlayWin.blur()
+  focusDcsWindow()
+}
+
+function applyOverlayDisplayMode(mode: OverlayDisplayMode): VrOverlayStatus {
+  overlayDisplayMode = mode
+  const status = vrOverlay?.setDisplayMode(mode) || { mode, available: false, bridgeRunning: false, error: 'VR overlay service is unavailable' }
+  configureOverlayWindowForMode(mode)
+  if (mode === 'vr' && overlayUserVisible) startVrFrameCapture()
+  else {
+    stopVrFrameCapture()
+    vrOverlay?.publishInactive()
+  }
+  win?.webContents.send('overlay:display-mode-changed', status)
+  overlayWin?.webContents.send('overlay:display-mode-changed', status)
+  return status
 }
 
 function startDcsProcessMonitor(): void {
@@ -188,7 +376,7 @@ function startDcsProcessMonitor(): void {
     if (running !== dcsProcessRunning) {
       dcsProcessRunning = running
       if (!running && overlayUserVisible) {
-        hideOverlay()
+        setOverlayVisibility(false)
       }
     }
   }, 3000)
@@ -232,10 +420,10 @@ public static class DcsHubKbdHook {
 
   private static IntPtr _hookId = IntPtr.Zero;
   private static HookProc _proc;
-  private static int _targetVk;
-  private static int _targetMods;
+  private static int _toggleVk;
+  private static int _toggleMods;
   private static int _currentMods;
-  private static bool _suppressNextKeyUp;
+  private static bool _toggleDown;
   private static int _parentPid;
 
   [StructLayout(LayoutKind.Sequential)]
@@ -279,6 +467,11 @@ public static class DcsHubKbdHook {
     else _currentMods &= ~mod;
   }
 
+  private static void Emit(string action) {
+    Console.Out.WriteLine(action);
+    Console.Out.Flush();
+  }
+
   private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
     if (nCode >= 0) {
       int vkCode = Marshal.ReadInt32(lParam);
@@ -288,16 +481,13 @@ public static class DcsHubKbdHook {
 
       UpdateMod(vkCode, isDown);
 
-      if (isDown && vkCode == _targetVk) {
-        if ((_currentMods & MOD_MASK) == _targetMods) {
-          _suppressNextKeyUp = true;
-          Console.Out.WriteLine("TRIGGER");
-          Console.Out.Flush();
-          return (IntPtr)1;
-        }
+      if (isDown && vkCode == _toggleVk && ((_currentMods & MOD_MASK) == _toggleMods)) {
+        if (!_toggleDown) Emit("TOGGLE");
+        _toggleDown = true;
+        return (IntPtr)1;
       }
-      if (isUp && vkCode == _targetVk && _suppressNextKeyUp) {
-        _suppressNextKeyUp = false;
+      if (isUp && vkCode == _toggleVk && _toggleDown) {
+        _toggleDown = false;
         return (IntPtr)1;
       }
     }
@@ -317,11 +507,11 @@ public static class DcsHubKbdHook {
 
   public static void Start(string[] args) {
     if (args.Length < 2) return;
-    _targetVk = int.Parse(args[0]);
-    _targetMods = int.Parse(args[1]);
+    _toggleVk = int.Parse(args[0]);
+    _toggleMods = int.Parse(args[1]);
     _parentPid = args.Length >= 3 ? int.Parse(args[2]) : 0;
     _currentMods = 0;
-    _suppressNextKeyUp = false;
+    _toggleDown = false;
     _proc = HookCallback;
     _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, IntPtr.Zero, 0);
     if (_hookId == IntPtr.Zero) {
@@ -375,7 +565,7 @@ function startKeyboardHook(hotkey: string): void {
     return
   }
 
-  registerGlobalShortcut(hotkey)
+  globalShortcut.unregisterAll()
 
   const psScript = `
 Add-Type -TypeDefinition @'
@@ -401,14 +591,17 @@ ${KBD_HOOK_CSHARP}
       stdoutBuf = lines.pop() ?? ''
       for (const line of lines) {
         const trimmed = line.trim()
-        if (trimmed === 'TRIGGER') {
+        if (trimmed === 'TOGGLE') {
           toggleOverlay()
+        } else if (trimmed === 'HOOK_FAILED') {
+          registerGlobalShortcut(hotkey)
         }
       }
     })
     proc.on('exit', () => {
       if (hotkeyHookProcess === proc) {
         hotkeyHookProcess = null
+        registerGlobalShortcut(hotkey)
       }
     })
     proc.on('error', () => {
@@ -417,7 +610,7 @@ ${KBD_HOOK_CSHARP}
       }
     })
   } catch {
-    // ignore - globalShortcut still registered as fallback
+    registerGlobalShortcut(hotkey)
   }
 }
 
@@ -442,7 +635,7 @@ function stopKeyboardHook(): void {
 function registerGlobalShortcut(hotkey: string): void {
   globalShortcut.unregisterAll()
   try {
-    globalShortcut.register(hotkey, toggleOverlay)
+    if (!globalShortcut.register(hotkey, toggleOverlay)) throw new Error('Overlay shortcut registration failed')
   } catch {
     try {
       globalShortcut.register(DEFAULT_OVERLAY_SETTINGS.hotkey, toggleOverlay)
@@ -487,9 +680,11 @@ function ensureOverlayWindow(): void {
       contextIsolation: true,
       sandbox: true,
       offscreen: false,
+      backgroundThrottling: false,
     },
   })
 
+  configureOverlayWindowForMode(overlayDisplayMode)
   overlayWin.setOpacity(overlaySettings.opacity)
   overlayWin.setIgnoreMouseEvents(true, { forward: true })
 
@@ -500,10 +695,13 @@ function ensureOverlayWindow(): void {
   overlayWin.loadURL(overlayUrl)
 
   overlayWin.webContents.on('did-finish-load', () => {
-    overlayWin?.setOpacity(overlaySettings.opacity)
+    overlayWin?.setOpacity(overlayDisplayMode === 'vr' && overlayUserVisible ? 0.01 : overlaySettings.opacity)
+    configureOverlayWindowForMode(overlayDisplayMode)
   })
 
   overlayWin.on('closed', () => {
+    stopVrFrameCapture()
+    vrOverlay?.publishInactive()
     overlayWin = null
     overlayUserVisible = false
   })
@@ -582,6 +780,7 @@ function createWindow(): void {
   const preloadPath = path.join(__dirname, 'preload.cjs')
   win = new BrowserWindow({
     title: 'DCSHUB',
+    icon: path.join(process.env.VITE_PUBLIC || process.env.DIST || '', 'images', 'dcshub-app-icon.png'),
     frame: false,
     autoHideMenuBar: true,
     width: 1512,
@@ -616,6 +815,26 @@ function createWindow(): void {
 
 function registerWindowIpc(): void {
   ipcMain.handle('window:open-update-page', () => shell.openExternal(UPDATE_DOWNLOAD_URL))
+  ipcMain.handle('updates:settings', () => {
+    if (!updateService) throw new Error('更新服务尚未初始化')
+    return updateService.settings()
+  })
+  ipcMain.handle('updates:set-automatic-checks', (_event, enabled: unknown) => {
+    if (!updateService) throw new Error('更新服务尚未初始化')
+    if (typeof enabled !== 'boolean') throw new Error('Invalid automatic update setting')
+    return updateService.setAutomaticChecks(enabled)
+  })
+  ipcMain.handle('updates:check', (_event, force: unknown) => {
+    if (!updateService) throw new Error('更新服务尚未初始化')
+    return updateService.check(force === true)
+  })
+  ipcMain.handle('updates:open-download', async (_event, rawUrl: unknown) => {
+    const url = new URL(assertText(rawUrl, 'update download URL', 2_048))
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || !url.pathname.startsWith('/Jonitane/DCSHUB/releases/tag/')) {
+      throw new Error('拒绝打开非 DCSHUB 官方更新地址')
+    }
+    await shell.openExternal(url.toString())
+  })
   ipcMain.handle('window:reset-all-user-data', async () => {
     // 同步清理：停止 hook 和快捷键（app.exit 会强制终止进程，子进程也会被清理）
     try { moduleManager?.setMonitoringActive(false) } catch { /* Best-effort cleanup before relaunch. */ }
@@ -631,7 +850,7 @@ function registerWindowIpc(): void {
     app.exit(0)
   })
   ipcMain.on('window:quit', () => app.quit())
-  ipcMain.on('overlay:hide', () => hideOverlay())
+  ipcMain.on('overlay:hide', () => setOverlayVisibility(false))
   ipcMain.handle('overlay:is-active', () => overlayUserVisible)
   ipcMain.handle('overlay:get-settings', () => overlaySettings)
   ipcMain.handle('overlay:set-hotkey', (_event, hotkey: unknown) => {
@@ -647,7 +866,7 @@ function registerWindowIpc(): void {
   ipcMain.handle('overlay:set-opacity', (_event, opacity: unknown) => {
     if (typeof opacity !== 'number' || opacity < 0.3 || opacity > 1) throw new Error('Invalid opacity')
     overlaySettings.opacity = opacity
-    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.setOpacity(opacity)
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.setOpacity(overlayDisplayMode === 'vr' && overlayUserVisible ? 0.01 : opacity)
     saveOverlaySettings()
     return overlaySettings
   })
@@ -662,10 +881,27 @@ function registerWindowIpc(): void {
   })
   ipcMain.handle('overlay:set-enabled', (_event, enabled: unknown) => {
     overlaySettings.enabled = !!enabled
-    if (!overlaySettings.enabled && overlayUserVisible) hideOverlay()
+    if (!overlaySettings.enabled && overlayUserVisible) setOverlayVisibility(false)
     saveOverlaySettings()
     return overlaySettings
   })
+  ipcMain.handle('overlay:get-display-mode', () => vrOverlay?.status() || {
+    mode: overlayDisplayMode,
+    available: false,
+    bridgeRunning: false,
+    error: 'VR overlay service is unavailable',
+  })
+  ipcMain.handle('overlay:set-display-mode', (_event, mode: unknown) => {
+    if (mode !== 'desktop' && mode !== 'vr') throw new Error('Invalid overlay display mode')
+    return applyOverlayDisplayMode(mode)
+  })
+  ipcMain.handle('overlay:move-vr', (_event, normalizedDeltaX: unknown, normalizedDeltaY: unknown) => {
+    if (typeof normalizedDeltaX !== 'number' || !Number.isFinite(normalizedDeltaX) || Math.abs(normalizedDeltaX) > 0.25) throw new Error('Invalid VR X movement')
+    if (typeof normalizedDeltaY !== 'number' || !Number.isFinite(normalizedDeltaY) || Math.abs(normalizedDeltaY) > 0.25) throw new Error('Invalid VR Y movement')
+    vrOverlay?.moveBy(normalizedDeltaX, normalizedDeltaY)
+  })
+  ipcMain.handle('overlay:begin-text-input', () => beginVrOverlayTextInput())
+  ipcMain.handle('overlay:end-text-input', () => endVrOverlayTextInput())
 }
 
 function registerModuleIpc(): void {
@@ -739,6 +975,10 @@ function registerSoftwareCatalogIpc(): void {
   ipcMain.handle('software-catalog:set-silent-launch', (_event, id: unknown, silent: unknown) => {
     if (typeof silent !== 'boolean') throw new Error('Invalid silent launch state')
     return service().setSilentLaunch(assertModuleId(id), silent)
+  })
+  ipcMain.handle('software-catalog:set-launch-delay', (_event, id: unknown, seconds: unknown) => {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds)) throw new Error('Invalid launch delay')
+    return service().setLaunchDelay(assertModuleId(id), seconds)
   })
   ipcMain.handle('software-catalog:remove', (_event, id: unknown) => service().remove(assertModuleId(id)))
   ipcMain.handle('software-catalog:complete-setup', (_event, enabledIds: unknown) => (
@@ -820,6 +1060,7 @@ function registerDcsIpc(): void {
   ipcMain.handle('dcs:use-automatic-detection', () => service().useAutomaticDetection())
   ipcMain.handle('dcs:launch', (_event, mode: unknown) => {
     if (mode !== 'vr' && mode !== 'desktop') throw new Error('Invalid DCS launch mode')
+    applyOverlayDisplayMode(mode)
     return service().launch(mode)
   })
   ipcMain.handle('dcs:launch-launcher', () => service().launchLauncher())
@@ -924,6 +1165,10 @@ app.whenReady().then(async () => {
   loadOverlaySettings()
   registerOverlayHotkey()
   startDcsProcessMonitor()
+  const vrResources = app.isPackaged
+    ? path.join(process.resourcesPath, 'vr-overlay')
+    : path.join(app.getAppPath(), 'build', 'native', 'vr-overlay')
+  vrOverlay = new VrOverlayService(vrResources)
   modManager = new ModManagerService(app.getPath('userData'))
   dcsLaunch = new DcsLaunchService(app.getPath('userData'))
   manualLibrary = new ManualLibraryService(
@@ -937,6 +1182,7 @@ app.whenReady().then(async () => {
     fetch,
     (progress) => win?.webContents.send('manual-library:progress', progress),
   )
+  updateService = new UpdateService(app.getPath('userData'), APP_VERSION, fetch)
   softwareCatalog = new SoftwareCatalogService(app.getPath('userData'), moduleManager, [
     { id: 'voxbind', createDriver: createVoxBindDriver },
     { id: 'srs', createDriver: createSrsDriver },
@@ -962,6 +1208,8 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   quitCleanupStarted = true
   stopDcsProcessMonitor()
+  stopVrFrameCapture()
+  try { vrOverlay?.dispose() } catch { /* Best-effort OpenXR cleanup before quit. */ }
   stopKeyboardHook()
   globalShortcut.unregisterAll()
   try { overlayWin?.destroy() } catch { /* The overlay may already be destroyed. */ }

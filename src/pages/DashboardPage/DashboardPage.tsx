@@ -17,6 +17,7 @@ import type { ModManagerOverview, ModPresetEntry } from '@/shared/mod-manager-co
 import { APP_VERSION } from '@/shared/app-meta'
 
 const isRunningState = (state?: string) => state === 'running' || state === 'degraded' || state === 'starting'
+const currentTimestamp = () => Date.now()
 
 export default function DashboardPage() {
   const navigate = useNavigate()
@@ -230,6 +231,17 @@ export default function DashboardPage() {
           if (!result.ok) {
             toast.error('软件预设启动未完成', { description: result.results.find((item) => !item.ok)?.error?.message })
             return
+          }
+          const catalog = await window.electronAPI?.softwareCatalog.overview()
+          const currentTime = currentTimestamp()
+          const remainingDelayMs = Math.max(0, ...missingModuleIds.map((id) => {
+            const configuredDelayMs = (catalog?.items.find((item) => item.id === id)?.launchDelaySeconds || 0) * 1_000
+            const runningSince = result.results.find((item) => item.moduleId === id)?.snapshot?.updatedAt || currentTime
+            return runningSince + configuredDelayMs - currentTime
+          }))
+          if (remainingDelayMs > 0) {
+            toast.info(`软件已就绪，${Math.ceil(remainingDelayMs / 1_000)} 秒后启动 DCS`)
+            await new Promise<void>((resolve) => window.setTimeout(resolve, remainingDelayMs))
           }
         }
         const dcsResult = await window.electronAPI?.dcs.launch(appSettings.dcsLaunchMode)
