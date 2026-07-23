@@ -29,7 +29,18 @@ function Test-ModelFile {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
   $item = Get-Item -LiteralPath $Path
   if ($item.Length -ne $Expected.Size) { return $false }
-  return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -eq $Expected.Sha256
+  $stream = [IO.File]::OpenRead($Path)
+  try {
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+      $hash = -join ($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString('X2') })
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+  return $hash -eq $Expected.Sha256
 }
 
 function Test-ModelDirectory {
