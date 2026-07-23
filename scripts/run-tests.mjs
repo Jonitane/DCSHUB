@@ -10,6 +10,8 @@ const suites = [
   'test:i18n',
   'test:update',
   'test:logging',
+  'test:app-data',
+  'test:overlay-hotkey',
   'test:vr-overlay',
   'test:manual-library',
 ]

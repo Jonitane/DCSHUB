@@ -58,7 +58,6 @@ export interface OverlayBridge {
   setMicrophone: (microphoneId: string | null) => Promise<OverlaySettings>
   listMicrophones: () => Promise<SpeechInputDevice[]>
   speechModelStatus: () => Promise<SpeechModelStatus>
-  downloadSpeechModel: () => Promise<SpeechModelStatus>
   setOpacity: (opacity: number) => Promise<OverlaySettings>
   setSize: (width: number, height: number) => Promise<OverlaySettings>
   setEnabled: (enabled: boolean) => Promise<OverlaySettings>
@@ -71,5 +70,4 @@ export interface OverlayBridge {
   onDisplayModeChanged: (callback: (status: VrOverlayStatus) => void) => () => void
   onSpeechState: (callback: (state: SpeechRecognitionState) => void) => () => void
   onSpeechResult: (callback: (text: string) => void) => () => void
-  onSpeechModelProgress: (callback: (status: SpeechModelStatus) => void) => () => void
 }

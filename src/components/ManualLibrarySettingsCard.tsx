@@ -8,67 +8,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Checkbox } from '@/components/ui/checkbox'
 import type { ChuckGuideCatalogItem, ManualLibraryOverview, ManualLibraryProgress } from '@/shared/manual-library-contracts'
 import type { OverlaySettings, SpeechInputDevice, SpeechModelStatus, VrOverlayStatus } from '@/shared/window-contracts'
+import { keyboardEventToAccelerator } from '@/shared/overlay-hotkey'
 import ManualAiSettingsPanel from '@/components/manual/ManualAiSettingsPanel'
-
-function keyEventToAccelerator(e: KeyboardEvent): string | null {
-  const parts: string[] = []
-  if (e.ctrlKey) parts.push('Control')
-  if (e.altKey) parts.push('Alt')
-  if (e.shiftKey) parts.push('Shift')
-  if (e.metaKey) parts.push('Super')
-
-  let key = e.key
-  const code = e.code
-
-  if (['Control', 'Alt', 'Shift', 'Meta'].includes(key)) return null
-
-  if (key === ' ' || code === 'Space') key = 'Space'
-  else if (key === 'Escape' || key === 'Esc') key = 'Escape'
-  else if (key === 'Enter' || key === 'Return') key = 'Enter'
-  else if (key === 'ArrowUp') key = 'Up'
-  else if (key === 'ArrowDown') key = 'Down'
-  else if (key === 'ArrowLeft') key = 'Left'
-  else if (key === 'ArrowRight') key = 'Right'
-  else if (key === 'Backspace') key = 'Backspace'
-  else if (key === 'Delete') key = 'Delete'
-  else if (key === 'Insert') key = 'Insert'
-  else if (key === 'Home') key = 'Home'
-  else if (key === 'End') key = 'End'
-  else if (key === 'PageUp') key = 'PageUp'
-  else if (key === 'PageDown') key = 'PageDown'
-  else if (key === 'Tab') key = 'Tab'
-  else if (key === 'CapsLock') key = 'CapsLock'
-  else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(key)) {
-    // keep F1-F24 as-is
-  } else if (/^[a-zA-Z]$/.test(key)) {
-    key = key.toUpperCase()
-  } else if (/^[0-9]$/.test(key)) {
-    // keep 0-9 as-is
-  } else if (code.startsWith('Numpad') && code !== 'NumpadAdd' && code !== 'NumpadSubtract' && code !== 'NumpadMultiply' && code !== 'NumpadDivide' && code !== 'NumpadDecimal') {
-    const num = code.replace('Numpad', '')
-    if (/^[0-9]$/.test(num)) key = `num${num}`
-    else return null
-  } else if (code === 'NumpadAdd') key = 'numadd'
-  else if (code === 'NumpadSubtract') key = 'numsub'
-  else if (code === 'NumpadMultiply') key = 'nummult'
-  else if (code === 'NumpadDivide') key = 'numdiv'
-  else if (code === 'NumpadDecimal') key = 'numdec'
-  else if (key === '+' || code === 'Equal') key = 'Plus'
-  else if (key === '-' || code === 'Minus') key = '-'
-  else if (key === ',' || code === 'Comma') key = ','
-  else if (key === '.' || code === 'Period') key = '.'
-  else if (key === '/' || code === 'Slash') key = '/'
-  else if (key === '\\' || code === 'Backslash') key = '\\'
-  else if (key === ';' || code === 'Semicolon') key = ';'
-  else if (key === "'" || code === 'Quote') key = "'"
-  else if (key === '[' || code === 'BracketLeft') key = '['
-  else if (key === ']' || code === 'BracketRight') key = ']'
-  else if (key === '`' || code === 'Backquote') key = '`'
-  else return null
-
-  parts.push(key)
-  return parts.join('+')
-}
 
 function formatHotkeyForDisplay(accelerator: string): string {
   const joystick = /^JOY:(\d+):BUTTON:(\d+)$/i.exec(accelerator)
@@ -80,6 +21,18 @@ function formatHotkeyForDisplay(accelerator: string): string {
     .replace(/nummult/gi, 'Num ×')
     .replace(/numdiv/gi, 'Num ÷')
     .replace(/numdec/gi, 'Num .')
+    .replace(/Semicolon/gi, ';')
+    .replace(/Plus/gi, '+')
+    .replace(/Equal/gi, '=')
+    .replace(/Comma/gi, ',')
+    .replace(/Minus/gi, '-')
+    .replace(/Period/gi, '.')
+    .replace(/Slash/gi, '/')
+    .replace(/Backslash/gi, '\\')
+    .replace(/Quote/gi, "'")
+    .replace(/LeftBracket/gi, '[')
+    .replace(/RightBracket/gi, ']')
+    .replace(/Backquote/gi, '`')
     .replace(/\+/g, ' + ')
     .replace(/Control/g, 'Ctrl')
     .replace(/CommandOrControl/g, 'Ctrl')
@@ -133,13 +86,7 @@ function HotkeyRecorder({
     }
     frame = requestAnimationFrame(pollGamepads)
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-        e.preventDefault()
-        e.stopPropagation()
-        setRecording(false)
-        return
-      }
-      const accel = keyEventToAccelerator(e)
+      const accel = keyboardEventToAccelerator(e)
       if (!accel) return
       e.preventDefault()
       e.stopPropagation()
@@ -181,7 +128,7 @@ function HotkeyRecorder({
         呼出/隐藏浮窗
       </div>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
-        短按呼出或隐藏；长按开始语音输入，松开后自动提问。支持键盘组合键和可被 Windows Game Controller 识别的外设按钮。
+        短按呼出或隐藏；长按开始语音输入，松开后自动提问。可自由设置普通单键、组合键、数字键盘键或 Windows Game Controller 外设按钮。
       </p>
       <div className="mt-3 flex items-center gap-3">
         <button
@@ -199,7 +146,7 @@ function HotkeyRecorder({
         >
           {recording ? (
             <span className="flex items-center justify-center gap-2">
-              <Keyboard className="size-4" />按下按键组合… (Esc取消)
+              <Keyboard className="size-4" />按下任意按键或外设按钮…
             </span>
           ) : saving ? (
             <span className="flex items-center justify-center gap-2">
@@ -212,6 +159,11 @@ function HotkeyRecorder({
             </span>
           )}
         </button>
+        {recording && (
+          <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-foreground" onClick={() => setRecording(false)}>
+            取消
+          </Button>
+        )}
         {settings && currentHotkey !== defaultHotkey && !recording && !saving && !disabled && (
           <Button
             size="sm"
@@ -277,7 +229,6 @@ export default function ManualLibrarySettingsCard() {
     void Promise.all([overlay.listMicrophones(), overlay.speechModelStatus()])
       .then(([devices, model]) => { setMicrophones(devices); setSpeechModel(model) })
       .catch(() => undefined)
-    return overlay.onSpeechModelProgress(setSpeechModel)
   }, [overlay])
   useEffect(() => {
     if (!overlay) return
@@ -297,15 +248,6 @@ export default function ManualLibrarySettingsCard() {
     overlay.setMicrophone(microphoneId || null)
       .then(setOverlaySettings)
       .catch((reason) => toast.error('麦克风设置失败', { description: reason instanceof Error ? reason.message : String(reason) }))
-  }
-
-  const downloadSpeechModel = () => {
-    if (!overlay) return
-    setOperation('sensevoice-download')
-    overlay.downloadSpeechModel()
-      .then((status) => { setSpeechModel(status); toast.success('SenseVoice 语音模型已就绪') })
-      .catch((reason) => toast.error('语音模型下载失败', { description: reason instanceof Error ? reason.message : String(reason) }))
-      .finally(() => setOperation(null))
   }
 
   const chuckDropdownRef = useRef<HTMLDivElement>(null)
@@ -419,7 +361,7 @@ export default function ManualLibrarySettingsCard() {
             <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => setOverlayOptionsOpen((current) => !current)} aria-expanded={overlayOptionsOpen}><div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-primary/[0.08]"><Gamepad2 className="size-4 text-primary" /></div><div className="min-w-0 flex-1"><p className="text-sm font-semibold">内置手册窗口</p><p className="mt-0.5 text-[10px] text-muted-foreground">{overlaySettings?.enabled === false ? '已关闭' : `已开启 · ${formatHotkeyForDisplay(overlaySettings?.hotkey || 'Ctrl+Alt+M')} · ${vrOverlayStatus?.mode === 'vr' ? 'VR / OpenXR' : '桌面'}`}</p></div><ChevronDown className={`size-4 text-muted-foreground transition-transform ${overlayOptionsOpen ? 'rotate-180 text-primary' : ''}`} /></button>
             <Switch aria-label="启用内置手册窗口" checked={overlaySettings?.enabled ?? true} onCheckedChange={toggleOverlayEnabled} />
           </div>
-          {overlayOptionsOpen && <div className="space-y-3 border-t border-border/35 p-3.5"><div className="rounded-lg border border-border/30 bg-background/35 p-3"><HotkeyRecorder settings={overlaySettings} onChange={setOverlaySettings} /></div><div className="rounded-lg border border-border/30 bg-background/35 p-3"><div className="flex items-center gap-2 text-sm font-semibold"><Mic className="size-4 text-primary" />语音输入</div><div className="mt-3 flex flex-wrap items-center gap-2"><select value={overlaySettings?.microphoneId || microphones.find((device) => device.isDefault)?.id || ''} onChange={(event) => setMicrophone(event.target.value)} className="h-9 min-w-56 flex-1 rounded-lg border border-input bg-background px-3 text-xs outline-none focus:ring-2 focus:ring-ring"><option value="">系统默认麦克风</option>{microphones.map((device) => <option key={device.id} value={device.id}>{device.name}{device.isDefault ? '（默认）' : ''}</option>)}</select>{speechModel?.installed ? <span className="rounded-md border border-emerald-400/25 bg-emerald-500/8 px-2.5 py-2 text-[11px] text-emerald-300">SenseVoice 已就绪</span> : <Button size="sm" variant="outline" onClick={downloadSpeechModel} disabled={speechModel?.downloading || operation === 'sensevoice-download'}>{speechModel?.downloading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}下载语音模型{speechModel?.downloading ? ` ${speechModel.progress}%` : ''}</Button>}</div>{speechModel?.error && <p className="mt-2 text-[11px] text-destructive">{speechModel.error}</p>}<p className="mt-2 text-[11px] leading-5 text-muted-foreground">短按呼出键控制窗口；长按说话，松开后由 SenseVoice 在本地转写并直接提问。转写会自动校正常见 DCS 机型、武器和航电术语。</p></div>{vrOverlayStatus && <div className="flex items-center gap-2 text-[11px] text-muted-foreground"><span className={`size-1.5 rounded-full ${vrOverlayStatus.mode === 'vr' && vrOverlayStatus.available && !vrOverlayStatus.error ? 'bg-emerald-400' : 'bg-muted-foreground/50'}`} /><span>当前跟随：{vrOverlayStatus.mode === 'vr' ? 'VR / OpenXR' : '桌面'}</span>{vrOverlayStatus.mode === 'vr' && (!vrOverlayStatus.available || vrOverlayStatus.error) && <span className="text-amber-400">VR 组件不可用</span>}</div>}<div className="rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2.5 text-[11px] leading-5 text-muted-foreground"><span className="font-semibold text-foreground">VR 操作：</span>呼出时面板会出现在当前视线正前方并保持空间固定；拖动标题栏可环绕移动，再次呼出会按新的视线方向定位。</div></div>}
+          {overlayOptionsOpen && <div className="space-y-3 border-t border-border/35 p-3.5"><div className="rounded-lg border border-border/30 bg-background/35 p-3"><HotkeyRecorder settings={overlaySettings} onChange={setOverlaySettings} /></div><div className="rounded-lg border border-border/30 bg-background/35 p-3"><div className="flex items-center gap-2 text-sm font-semibold"><Mic className="size-4 text-primary" />语音输入</div><div className="mt-3 flex flex-wrap items-center gap-2"><select value={overlaySettings?.microphoneId || microphones.find((device) => device.isDefault)?.id || ''} onChange={(event) => setMicrophone(event.target.value)} className="h-9 min-w-56 flex-1 rounded-lg border border-input bg-background px-3 text-xs outline-none focus:ring-2 focus:ring-ring"><option value="">系统默认麦克风</option>{microphones.map((device) => <option key={device.id} value={device.id}>{device.name}{device.isDefault ? '（默认）' : ''}</option>)}</select>{speechModel?.installed ? <span className="rounded-md border border-emerald-400/25 bg-emerald-500/8 px-2.5 py-2 text-[11px] text-emerald-300">SenseVoice 已内置</span> : <span className="rounded-md border border-destructive/30 bg-destructive/8 px-2.5 py-2 text-[11px] text-destructive">语音模型缺失</span>}</div>{speechModel?.error && <p className="mt-2 text-[11px] text-destructive">{speechModel.error}</p>}<p className="mt-2 text-[11px] leading-5 text-muted-foreground">语音模型已随 DCSHUB 安装，可完全离线使用，无需另行下载。短按呼出键控制窗口；长按说话，松开后由 SenseVoice 在本地转写并直接提问。转写会自动校正常见 DCS 机型、武器和航电术语。</p></div>{vrOverlayStatus && <div className="flex items-center gap-2 text-[11px] text-muted-foreground"><span className={`size-1.5 rounded-full ${vrOverlayStatus.mode === 'vr' && vrOverlayStatus.available && !vrOverlayStatus.error ? 'bg-emerald-400' : 'bg-muted-foreground/50'}`} /><span>当前跟随：{vrOverlayStatus.mode === 'vr' ? 'VR / OpenXR' : '桌面'}</span>{vrOverlayStatus.mode === 'vr' && (!vrOverlayStatus.available || vrOverlayStatus.error) && <span className="text-amber-400">VR 组件不可用</span>}</div>}<div className="rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2.5 text-[11px] leading-5 text-muted-foreground"><span className="font-semibold text-foreground">VR 操作：</span>呼出时面板会出现在当前视线正前方并保持空间固定；拖动标题栏可环绕移动，再次呼出会按新的视线方向定位。</div></div>}
         </section>
 
         <section className="overflow-hidden rounded-xl border border-border/40 bg-background/30">

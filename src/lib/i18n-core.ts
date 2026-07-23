@@ -53,7 +53,7 @@ const ENGLISH_TEXT: Record<string, string> = {
   '超级手册': 'Super Manual',
   '内置手册窗口': 'Built-in Manual Window',
   '呼出/隐藏浮窗': 'Show / Hide Overlay',
-  'DCS 运行时按一次呼出、再按一次隐藏；每次呼出都会把 VR 浮窗重新放到当前头部朝向的正前方。支持组合键（如 Ctrl+Alt+K）。': 'Press once to show and again to hide while DCS is running. Each show places the VR overlay directly in front of your current head direction. Key combinations such as Ctrl+Alt+K are supported.',
+  'DCS 运行时按一次呼出、再按一次隐藏；每次呼出都会把 VR 浮窗重新放到当前头部朝向的正前方。支持单键、组合键和外设按钮。': 'Press once to show and again to hide while DCS is running. Each show places the VR overlay directly in front of your current head direction. Single keys, key combinations, and controller buttons are supported.',
   'VR 操作：': 'VR controls:',
   '按呼出键时，浮窗始终出现在当前头部朝向的正前方；显示后会固定在空间中，拖动顶部标题栏可调整固定位置。再次隐藏并呼出即可按新的视线方向重新定位。': 'Each time you show it, the overlay appears directly in front of your current head direction. It then remains fixed in space; drag the title bar to adjust its fixed position. Hide and show it again to reposition it using your new view direction.',
   'DCS 智能手册': 'DCS Smart Manuals',

@@ -1,10 +1,11 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, safeStorage, screen, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, session, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { APP_VERSION, UPDATE_DOWNLOAD_URL } from '../src/shared/app-meta'
 import type { HubWindowSettings, OverlayDisplayMode, SpeechModelStatus, SpeechRecognitionState, VrOverlayStatus } from '../src/shared/window-contracts'
+import { parseJoystickHotkey, parseWindowsHotkeyAccelerator } from '../src/shared/overlay-hotkey'
 import { RateLimitedLogger } from './logging/rate-limited-logger'
 import { DiagnosticLogger } from './logging/diagnostic-logger'
 import { AppCore } from './core/app-core'
@@ -15,6 +16,7 @@ import { registerModuleIpc } from './ipc/modules'
 import { registerDcsIpc } from './ipc/dcs'
 import { registerManualLibraryIpc } from './ipc/manual-library'
 import { normalizeDcsSpeechTranscript } from './builtins/manual-library/speech-normalizer'
+import { migrateLegacyApplicationData, resolveApplicationDataDirectories } from './app-data'
 
 interface OverlaySettings {
   schemaVersion: number
@@ -60,12 +62,24 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RESET_USER_DATA_ARG = '--dcshub-reset-user-data'
 const PRESERVE_DIRS_ON_RESET = new Set(['Crashpad', 'Temp', 'Fonts'])
 const PRESERVE_FILES_ON_RESET = new Set(['SingletonLock', 'SingletonCookie', 'SingletonSocket'])
+const applicationDataDirectories = resolveApplicationDataDirectories({
+  isPackaged: app.isPackaged,
+  executablePath: process.execPath,
+  applicationPath: app.getAppPath(),
+  legacyDirectory: app.getPath('userData'),
+})
+
+fs.mkdirSync(applicationDataDirectories.targetDirectory, { recursive: true })
+if (app.isPackaged) migrateLegacyApplicationData(applicationDataDirectories)
+app.setPath('userData', applicationDataDirectories.targetDirectory)
+app.setPath('sessionData', path.join(applicationDataDirectories.targetDirectory, 'Session Data'))
 
 function resetAppDataIfRequested(): void {
   if (!process.argv.includes(RESET_USER_DATA_ARG)) return
   const userDataPath = path.resolve(app.getPath('userData'))
-  const appDataPath = path.resolve(app.getPath('appData'))
-  if (path.dirname(userDataPath).toLocaleLowerCase() !== appDataPath.toLocaleLowerCase()) throw new Error('拒绝清除非 DCSHUB 用户数据目录')
+  if (userDataPath.toLocaleLowerCase() !== applicationDataDirectories.targetDirectory.toLocaleLowerCase()) {
+    throw new Error('拒绝清除非 DCSHUB 用户数据目录')
+  }
   for (const entry of fs.readdirSync(userDataPath, { withFileTypes: true })) {
     if (PRESERVE_DIRS_ON_RESET.has(entry.name)) continue
     if (PRESERVE_FILES_ON_RESET.has(entry.name)) continue
@@ -101,11 +115,6 @@ const diagnosticLogDirectory = path.join(app.isPackaged ? path.dirname(process.e
 const diagnosticLogger = new DiagnosticLogger(diagnosticLogDirectory)
 const mainLogger = new RateLimitedLogger('DCSHUB/main', 30_000, (key, message, error, detail) => diagnosticLogger.warn('main', key, error, { message, ...detail }))
 let quitCleanupStarted = false
-const SENSEVOICE_MODEL_NAME = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17'
-const SENSEVOICE_MODEL_URL = `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${SENSEVOICE_MODEL_NAME}.tar.bz2`
-let speechModelDownload: Promise<SpeechModelStatus> | null = null
-let speechModelProgress = 0
-let speechModelError: string | null = null
 let speechRecording = false
 let speechStarting: Promise<void> | null = null
 let speechFinishing = false
@@ -118,82 +127,28 @@ const SPEECH_RELEASE_AUDIO_TAIL_MS = 240
 const SHUTDOWN_CLEANUP_TIMEOUT_MS = 15_000
 
 function senseVoiceModelDirectory(): string {
-  return path.join(app.getPath('userData'), 'speech-models', 'sensevoice')
+  if (app.isPackaged) return path.join(process.resourcesPath, 'speech-models', 'sensevoice')
+  const preparedDirectory = path.join(app.getAppPath(), 'build', 'native', 'speech-models', 'sensevoice')
+  if (fs.existsSync(path.join(preparedDirectory, 'model.int8.onnx'))) return preparedDirectory
+  return path.join(applicationDataDirectories.legacyDirectory, 'speech-models', 'sensevoice')
 }
 
 function speechModelStatus(): SpeechModelStatus {
   const directory = senseVoiceModelDirectory()
+  const installed = fs.existsSync(path.join(directory, 'model.int8.onnx'))
+    && fs.existsSync(path.join(directory, 'tokens.txt'))
   return {
-    installed: fs.existsSync(path.join(directory, 'model.int8.onnx')) && fs.existsSync(path.join(directory, 'tokens.txt')),
-    downloading: speechModelDownload !== null,
-    progress: speechModelProgress,
+    installed,
+    downloading: false,
+    progress: installed ? 100 : 0,
     modelDirectory: directory,
-    error: speechModelError,
+    error: installed ? null : '安装包中的 SenseVoice 语音模型缺失，请重新安装 DCSHUB',
   }
-}
-
-function broadcastSpeechModelStatus(): SpeechModelStatus {
-  const status = speechModelStatus()
-  win?.webContents.send('overlay:speech-model-progress', status)
-  overlayWin?.webContents.send('overlay:speech-model-progress', status)
-  return status
 }
 
 function sendSpeechState(state: SpeechRecognitionState): void {
   win?.webContents.send('overlay:speech-state', state)
   overlayWin?.webContents.send('overlay:speech-state', state)
-}
-
-async function downloadSenseVoiceModel(): Promise<SpeechModelStatus> {
-  if (speechModelStatus().installed) return speechModelStatus()
-  if (speechModelDownload) return await speechModelDownload
-  speechModelDownload = (async () => {
-    const parent = path.dirname(senseVoiceModelDirectory())
-    const archive = path.join(app.getPath('temp'), `${SENSEVOICE_MODEL_NAME}-${process.pid}.tar.bz2`)
-    const extracted = path.join(parent, SENSEVOICE_MODEL_NAME)
-    fs.mkdirSync(parent, { recursive: true })
-    speechModelError = null
-    speechModelProgress = 0
-    broadcastSpeechModelStatus()
-    try {
-      const response = await fetch(SENSEVOICE_MODEL_URL, { redirect: 'follow', signal: AbortSignal.timeout(30 * 60_000) })
-      if (!response.ok || !response.body) throw new Error(`模型下载失败：HTTP ${response.status}`)
-      const total = Number(response.headers.get('content-length')) || 0
-      const reader = response.body.getReader()
-      const output = fs.createWriteStream(archive)
-      let received = 0
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (!output.write(Buffer.from(value))) await new Promise<void>((resolve) => output.once('drain', resolve))
-        received += value.byteLength
-        const nextProgress = total > 0 ? Math.min(92, Math.round(received / total * 92)) : Math.min(90, speechModelProgress + 1)
-        if (nextProgress !== speechModelProgress) {
-          speechModelProgress = nextProgress
-          broadcastSpeechModelStatus()
-        }
-      }
-      await new Promise<void>((resolve, reject) => output.end((error?: Error | null) => error ? reject(error) : resolve()))
-      fs.rmSync(extracted, { recursive: true, force: true })
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn('tar.exe', ['-xjf', archive, '-C', parent], { windowsHide: true, stdio: 'ignore' })
-        child.once('error', reject)
-        child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`模型解压失败：tar ${code}`)))
-      })
-      fs.rmSync(senseVoiceModelDirectory(), { recursive: true, force: true })
-      fs.renameSync(extracted, senseVoiceModelDirectory())
-      speechModelProgress = 100
-      return broadcastSpeechModelStatus()
-    } catch (reason) {
-      speechModelError = reason instanceof Error ? reason.message : String(reason)
-      throw reason
-    } finally {
-      try { fs.rmSync(archive, { force: true }) } catch { /* temporary download cleanup */ }
-      speechModelDownload = null
-      broadcastSpeechModelStatus()
-    }
-  })()
-  return await speechModelDownload
 }
 
 function requireCore(): AppCore {
@@ -330,51 +285,6 @@ function scheduleWindowBoundsSave(): void {
     windowBoundsSaveTimer = null
     rememberCurrentWindowBounds()
   }, 250)
-}
-
-interface ParsedHotkey { vkCode: number; mods: number }
-
-function parseElectronAccelerator(accelerator: string): ParsedHotkey | null {
-  const parts = accelerator.split('+').map((p) => p.trim().toLowerCase())
-  let mods = 0
-  let key = ''
-  for (const p of parts) {
-    if (!p) continue
-    if (p === 'ctrl' || p === 'control' || p === 'cmd' || p === 'command' || p === 'super') mods |= 0x02
-    else if (p === 'shift') mods |= 0x04
-    else if (p === 'alt' || p === 'option') mods |= 0x01
-    else if (p === 'meta' || p === 'win' || p === 'windows') mods |= 0x08
-    else key = p
-  }
-  if (!key) return null
-  let vkCode = 0
-  if (/^f([1-9]|1[0-9]|2[0-4])$/.test(key)) vkCode = 0x6F + parseInt(key.slice(1), 10)
-  else if (/^[a-z]$/.test(key)) vkCode = key.toUpperCase().charCodeAt(0)
-  else if (/^[0-9]$/.test(key)) vkCode = 0x30 + parseInt(key, 10)
-  else if (/^num[0-9]$/.test(key)) vkCode = 0x60 + parseInt(key.slice(3), 10)
-  else if (key === 'nummult') vkCode = 0x6A
-  else if (key === 'numadd') vkCode = 0x6B
-  else if (key === 'numsub') vkCode = 0x6D
-  else if (key === 'numdec') vkCode = 0x6E
-  else if (key === 'numdiv') vkCode = 0x6F
-  else if (key === 'escape' || key === 'esc') vkCode = 0x1B
-  else if (key === 'tab') vkCode = 0x09
-  else if (key === 'space' || key === 'spacebar') vkCode = 0x20
-  else if (key === 'enter' || key === 'return') vkCode = 0x0D
-  else if (key === 'backspace') vkCode = 0x08
-  else if (key === 'up') vkCode = 0x26
-  else if (key === 'down') vkCode = 0x28
-  else if (key === 'left') vkCode = 0x25
-  else if (key === 'right') vkCode = 0x27
-  else if (key === 'delete') vkCode = 0x2E
-  else if (key === 'insert') vkCode = 0x2D
-  else if (key === 'home') vkCode = 0x24
-  else if (key === 'end') vkCode = 0x23
-  else if (key === 'pageup') vkCode = 0x21
-  else if (key === 'pagedown') vkCode = 0x22
-  else if (key === 'capslock') vkCode = 0x14
-  else return null
-  return { vkCode, mods }
 }
 
 let lastOverlayToggleAt = 0
@@ -546,6 +456,9 @@ function applyOverlayDisplayMode(mode: OverlayDisplayMode): VrOverlayStatus {
 }
 
 let hotkeyHookProcess: ChildProcess | null = null
+let requestedHotkey: string | null = null
+let hotkeyRestartTimer: ReturnType<typeof setTimeout> | null = null
+let hotkeyRestartAttempts = 0
 
 function overlayHotkeyDown(): void {
   if (hotkeyPressTimer || hotkeyLongPress) return
@@ -595,7 +508,7 @@ async function startSpeechQuestion(): Promise<void> {
   try {
     if (!speechModelStatus().installed) {
       showOverlay()
-      sendSpeechState({ state: 'error', message: '请先在“设置 → 超级手册 → 内置手册窗口”下载 SenseVoice 语音模型' })
+      sendSpeechState({ state: 'error', message: '安装包中的 SenseVoice 语音模型缺失，请重新安装 DCSHUB' })
       return
     }
     showOverlay()
@@ -635,24 +548,38 @@ async function finishSpeechQuestion(): Promise<void> {
 
 function startKeyboardHook(hotkey: string): void {
   stopKeyboardHook()
-  if (process.platform !== 'win32') {
-    registerGlobalShortcut(hotkey)
-    return
-  }
-  const joystick = /^JOY:(\d+):BUTTON:(\d+)$/i.exec(hotkey)
-  const parsed = joystick ? null : parseElectronAccelerator(hotkey)
-  if (!parsed && !joystick) {
-    registerGlobalShortcut(DEFAULT_OVERLAY_SETTINGS.hotkey)
-    return
-  }
+  requestedHotkey = hotkey
+  hotkeyRestartAttempts = 0
+  launchKeyboardHook(hotkey)
+}
 
-  globalShortcut.unregisterAll()
+function scheduleKeyboardHookRestart(hotkey: string): void {
+  if (requestedHotkey !== hotkey || hotkeyRestartTimer) return
+  const delay = Math.min(10_000, 500 * 2 ** Math.min(hotkeyRestartAttempts, 5))
+  hotkeyRestartAttempts += 1
+  hotkeyRestartTimer = setTimeout(() => {
+    hotkeyRestartTimer = null
+    if (requestedHotkey === hotkey) launchKeyboardHook(hotkey)
+  }, delay)
+}
+
+function launchKeyboardHook(hotkey: string): void {
+  if (process.platform !== 'win32') {
+    mainLogger.warn('hotkey-platform-unsupported', '当前平台不支持非独占式全局按键监听')
+    return
+  }
+  const joystick = parseJoystickHotkey(hotkey)
+  const parsed = joystick ? null : parseWindowsHotkeyAccelerator(hotkey)
+  if (!parsed && !joystick) {
+    mainLogger.warn('hotkey-invalid', '无法启动内置手册按键监听：按键格式无效', undefined, { hotkey })
+    return
+  }
 
   const psScript = `
 Add-Type -TypeDefinition @'
 ${keyboardHookSource}
 '@
-[DcsHubKbdHook]::Start(@(${joystick ? `'JOY','${joystick[1]}','${joystick[2]}','${process.pid}'` : `'${parsed!.vkCode}','${parsed!.mods}','${process.pid}'`}))
+[DcsHubKbdHook]::Start(@(${joystick ? `'JOY','${joystick.deviceIndex}','${joystick.buttonIndex}','${process.pid}'` : `'${parsed!.vkCode}','${parsed!.mods}','${process.pid}'`}))
 `
   try {
     hotkeyHookProcess = spawn('powershell.exe', [
@@ -676,35 +603,42 @@ ${keyboardHookSource}
           overlayHotkeyDown()
         } else if (trimmed === 'UP') {
           overlayHotkeyUp()
+        } else if (trimmed === 'HOOK_READY') {
+          hotkeyRestartAttempts = 0
         } else if (trimmed === 'HOOK_FAILED') {
-          registerGlobalShortcut(hotkey)
+          mainLogger.warn('hotkey-hook-failed', '非独占式全局按键监听启动失败', undefined, { hotkey })
         }
       }
     })
     proc.on('exit', () => {
       if (hotkeyHookProcess === proc) {
         hotkeyHookProcess = null
-        if (!joystick) registerGlobalShortcut(hotkey)
+        scheduleKeyboardHookRestart(hotkey)
       }
     })
     proc.on('error', () => {
       if (hotkeyHookProcess === proc) {
         hotkeyHookProcess = null
+        scheduleKeyboardHookRestart(hotkey)
       }
     })
-  } catch {
-    registerGlobalShortcut(hotkey)
+  } catch (error) {
+    mainLogger.warn('hotkey-hook-start', '非独占式全局按键监听启动失败', error, { hotkey })
+    scheduleKeyboardHookRestart(hotkey)
   }
 }
 
 function stopKeyboardHook(): void {
+  requestedHotkey = null
+  if (hotkeyRestartTimer) clearTimeout(hotkeyRestartTimer)
+  hotkeyRestartTimer = null
+  hotkeyRestartAttempts = 0
   if (hotkeyPressTimer) clearTimeout(hotkeyPressTimer)
   hotkeyPressTimer = null
   hotkeyLongPress = false
   hotkeyPressedAt = 0
   if (speechRecording) void core?.cancelSpeech()
   speechRecording = false
-  globalShortcut.unregisterAll()
   if (hotkeyHookProcess) {
     const proc = hotkeyHookProcess
     hotkeyHookProcess = null
@@ -718,19 +652,6 @@ function stopKeyboardHook(): void {
         require('child_process').execSync(`taskkill /PID ${pid} /T /F`, { windowsHide: true, stdio: 'ignore', timeout: 2000 })
       } catch { /* ignore */ }
     }
-  }
-}
-
-function registerGlobalShortcut(hotkey: string): void {
-  globalShortcut.unregisterAll()
-  try {
-    if (!globalShortcut.register(hotkey, toggleOverlay)) throw new Error('Overlay shortcut registration failed')
-  } catch {
-    try {
-      globalShortcut.register(DEFAULT_OVERLAY_SETTINGS.hotkey, toggleOverlay)
-      overlaySettings.hotkey = DEFAULT_OVERLAY_SETTINGS.hotkey
-      saveOverlaySettings()
-    } catch { /* ignore */ }
   }
 }
 
@@ -901,7 +822,6 @@ function registerWindowIpc(): void {
     // 同步清理：停止 hook 和快捷键（app.exit 会强制终止进程，子进程也会被清理）
     try { core?.setMonitoringActive(false) } catch { /* Best-effort cleanup before relaunch. */ }
     try { stopKeyboardHook() } catch { /* Best-effort cleanup before relaunch. */ }
-    try { globalShortcut.unregisterAll() } catch { /* Best-effort cleanup before relaunch. */ }
     // 清除 session 缓存
     try { await session.defaultSession.clearCache() } catch { /* Relaunch must continue if cache cleanup fails. */ }
     try { await session.defaultSession.clearStorageData() } catch { /* Relaunch must continue if storage cleanup fails. */ }
@@ -920,8 +840,8 @@ function registerWindowIpc(): void {
   ipcMain.handle('overlay:set-hotkey', (_event, hotkey: unknown) => {
     if (typeof hotkey !== 'string' || !hotkey.trim()) throw new Error('Invalid hotkey')
     const newHotkey = hotkey.trim()
-    const parsed = parseElectronAccelerator(newHotkey)
-    const joystick = /^JOY:\d+:BUTTON:\d+$/i.test(newHotkey)
+    const parsed = parseWindowsHotkeyAccelerator(newHotkey)
+    const joystick = parseJoystickHotkey(newHotkey)
     if (!parsed && !joystick) throw new Error('不支持的热键或外设按钮')
     overlaySettings.hotkey = newHotkey
     saveOverlaySettings()
@@ -1128,7 +1048,6 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('overlay:list-microphones', () => requireCore().speechDevices())
   ipcMain.handle('overlay:speech-model-status', () => speechModelStatus())
-  ipcMain.handle('overlay:download-speech-model', () => downloadSenseVoiceModel())
   core.events.on('dcs-process-changed', (running) => {
     if (!running && overlayUserVisible) setOverlayVisibility(false)
   })
@@ -1151,7 +1070,6 @@ app.on('before-quit', (event) => {
   quitCleanupStarted = true
   stopVrFrameCapture()
   stopKeyboardHook()
-  globalShortcut.unregisterAll()
   try { overlayWin?.destroy() } catch { /* The overlay may already be destroyed. */ }
   overlayWin = null
   void (async () => {

@@ -147,7 +147,6 @@ const overlay: OverlayBridge = {
   setMicrophone: (microphoneId: string | null) => ipcRenderer.invoke('overlay:set-microphone', microphoneId),
   listMicrophones: () => ipcRenderer.invoke('overlay:list-microphones'),
   speechModelStatus: () => ipcRenderer.invoke('overlay:speech-model-status'),
-  downloadSpeechModel: () => ipcRenderer.invoke('overlay:download-speech-model'),
   setOpacity: (opacity: number) => ipcRenderer.invoke('overlay:set-opacity', opacity),
   setSize: (width: number, height: number) => ipcRenderer.invoke('overlay:set-size', width, height),
   setEnabled: (enabled: boolean) => ipcRenderer.invoke('overlay:set-enabled', enabled),
@@ -175,11 +174,6 @@ const overlay: OverlayBridge = {
     const handler = (_event: Electron.IpcRendererEvent, value: string) => callback(value)
     ipcRenderer.on('overlay:speech-result', handler)
     return () => ipcRenderer.removeListener('overlay:speech-result', handler)
-  },
-  onSpeechModelProgress: (callback) => {
-    const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]) => callback(state)
-    ipcRenderer.on('overlay:speech-model-progress', handler)
-    return () => ipcRenderer.removeListener('overlay:speech-model-progress', handler)
   },
 }
 

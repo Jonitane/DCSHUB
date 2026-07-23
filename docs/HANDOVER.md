@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-07-23 当前正式发布准备状态（V2.6.0）
+
+- SenseVoice `model.int8.onnx` 与 `tokens.txt` 已改为安装资源，构建前运行 `npm run prepare:speech-model`；国内源为 ModelScope `gomodels/sherpa`，脚本会执行固定大小与 SHA-256 校验。
+- 正式/绿色打包版的数据根目录为 `DCSHUB.exe` 同级 `data`，首次运行非覆盖迁移旧 `%APPDATA%\dcs-control-hub`，不会复制旧的语音模型与 Chromium 临时缓存，也不会删除旧目录。
+- 开发模式的数据根目录为源码下 `.tmp/dev-user-data`，避免调试修改正式用户配置。
+- NSIS 使用 `build/installer.nsh` 在覆盖升级期间保留 `$INSTDIR\data`；正常主动卸载仍会删除整个安装目录。
+- 内置手册键盘钩子必须是非独占监听：`electron/native/windows/keyboard-hook.cs` 的所有路径都调用 `CallNextHookEx`。禁止重新引入 `globalShortcut` 作为降级方案，否则会抢占用户绑定的按键。
+- 用户已明确要求本轮验证完成后推送云端、创建 `V2.6.0` 标签并向开启更新检查的用户推送更新提醒。
+
 ## 1. 首要规则
 
 以下规则优先级最高，新会话开始工作前必须先确认：
@@ -36,9 +45,9 @@
 | 调试绿色版 | `G:\AI\GPT\DCS\DCSHUB-Debug-Portable` |
 | Git 分支 | `main` |
 | 当前 HEAD | 以 `git log -1 --oneline` 为准 |
-| Git 工作区 | V2.5.1 发布提交完成后应为清洁状态；仍需先运行 `git status --short` 确认 |
-| `package.json` 版本 | `2.5.1` |
-| 本地/正式显示版本 | `V2.5.1` |
+| Git 工作区 | V2.6.0 发布提交完成后应为清洁状态；仍需先运行 `git status --short` 确认 |
+| `package.json` 版本 | `2.6.0` |
+| 本地/正式显示版本 | `V2.6.0` |
 | Electron | `43.2.0` |
 | Windows 后端 | .NET 10 |
 | VR 层 | 原生 C++ OpenXR API Layer |
@@ -49,14 +58,16 @@
 - `npm run typecheck` 通过。
 - `npx tsc -p tsconfig.node.json` 通过。
 - `npm run lint` 通过。
-- `npm test` 的 11 个集成测试套件完整通过。
+- `npm test` 的 13 个集成测试套件完整通过。
 - `npm run build -- --publish never` 正式安装程序构建通过。
 - `release\win-unpacked` 已同步到 `DCSHUB-Debug-Portable`。
 - 实际启动调试绿色版后通过系统窗口关闭，目录下 Electron、Core Host、VR Bridge 均无残留进程。
 - 最近一次确认的 `app.asar` SHA-256：
-  `690E7D7E7539CCA395770E2D9D88B50C086B481F48C08E70074BED4087F2A24A`
+  `8DC3156B4853DE95B0ED13AEFE39B13BD843D6911C89308345093A36F5B56B8C`
+- 本地正式安装包：`release\DCSHUB Setup 2.6.0.exe`，大小约 `305.51 MB`，SHA-256：
+  `2ED788074B730A1272C39CF0EFAAA221B7AAF8F4059CAFF7FE9D4E13EC94806B`
 
-V2.5.1 正式安装程序已在本地构建验证；公开发布由 `V2.5.1` 标签触发 GitHub Actions 完成。
+V2.6.0 正式安装程序已在本地构建验证；公开发布由 `V2.6.0` 标签触发 GitHub Actions 完成。
 
 ---
 
@@ -790,6 +801,19 @@ Set-Location 'G:\AI\GPT\DCS\DCS HUB'
 npm run dev
 ```
 
+日常小改动优先使用轻量入口：
+
+```powershell
+npm run dev:fast
+```
+
+- Renderer/UI 修改由 Vite 热更新，无需重启或重新打包。
+- Electron 主进程或 Preload 修改会自动重建并重启开发进程。
+- 只有 `core/` 变化时才先执行 `npm run build:core`。
+- 只有 `native/vr-overlay/` 变化时才先执行 `npm run build:vr-overlay`，并彻底重启 DCS。
+- 只有需要验证安装、打包资源、升级覆盖或最终候选版本时，才执行 `npm run build:debug-portable` 并同步绿色版。
+- 默认先让用户在开发运行窗口验证小改动，不再为每个 UI/TypeScript 小修完整打包绿色版。
+
 ### 13.2 类型检查
 
 ```powershell
@@ -866,20 +890,22 @@ npm run build
 
 最近本地版本重点处理：
 
-1. 超级手册回答语言绑定主界面语言。
-2. 本地与在线问答缓存按语言隔离。
-3. 主页面和 Overlay 都传入当前 UI 语言。
-4. 证据校验兼容旧缓存和不同引用结构。
-5. 不再仅因步骤缺少 `kind` 字段而丢弃整份有效答案。
-6. 每条正文最多显示一个引用。
-7. CASE I/II/III、F-14 共享手册、武器型号等检索规则已经做过多轮修复。
-8. PDF 页面预览采用答案优先、图片后台处理。
-9. 桌面与 VR 内置膝板分别记忆尺寸，右侧引用图片随答案滚动保持可见。
-10. SenseVoice 结果接入统一术语/缩写后处理，“节达姆”等会归一为 `JDAM`；无意义或过于抽象的问题提示使用联网搜索。
-11. 旧默认手册热键从 `F9` 迁移到 `Ctrl+Alt+M`，关闭功能时卸载键盘 Hook。
-12. 修复主窗口关闭后因隐藏 Overlay 存在而残留 Electron、Core Host 与 VR Bridge 的问题。
-13. 修复旧 `result` 成功判断被错误转换成独立编号操作步骤的回归；完整手册集成测试恢复全绿。
-14. 语音识别加入完整机型名称归一层，覆盖 `iPhone → F-14` 及常见中英文机型字母/数字拆读。
+1. 超级手册热键录制支持普通单键、组合键、数字键盘、常用标点和 Windows Game Controller 按钮；修复 Win 键和标点解析不一致。
+2. 新增 `npm run dev:fast` 轻量调试入口，小改动直接使用 Vite/Electron 开发运行验证，不再反复生成整套绿色版。
+3. 超级手册回答语言绑定主界面语言。
+4. 本地与在线问答缓存按语言隔离。
+5. 主页面和 Overlay 都传入当前 UI 语言。
+6. 证据校验兼容旧缓存和不同引用结构。
+7. 不再仅因步骤缺少 `kind` 字段而丢弃整份有效答案。
+8. 每条正文最多显示一个引用。
+9. CASE I/II/III、F-14 共享手册、武器型号等检索规则已经做过多轮修复。
+10. PDF 页面预览采用答案优先、图片后台处理。
+11. 桌面与 VR 内置膝板分别记忆尺寸，右侧引用图片随答案滚动保持可见。
+12. SenseVoice 结果接入统一术语/缩写后处理，“节达姆”等会归一为 `JDAM`；无意义或过于抽象的问题提示使用联网搜索。
+13. 旧默认手册热键从 `F9` 迁移到 `Ctrl+Alt+M`，关闭功能时卸载键盘 Hook。
+14. 修复主窗口关闭后因隐藏 Overlay 存在而残留 Electron、Core Host 与 VR Bridge 的问题。
+15. 修复旧 `result` 成功判断被错误转换成独立编号操作步骤的回归；完整手册集成测试恢复全绿。
+16. 语音识别加入完整机型名称归一层，覆盖 `iPhone → F-14` 及常见中英文机型字母/数字拆读。
 
 最近仍需用户验证的重点：
 

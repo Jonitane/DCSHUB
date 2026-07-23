@@ -108,14 +108,14 @@ public static class DcsHubKbdHook {
       if (isDown && vkCode == _toggleVk && ((_currentMods & MOD_MASK) == _toggleMods)) {
         if (!_toggleDown) Emit("DOWN");
         _toggleDown = true;
-        return (IntPtr)1;
       }
       if (isUp && vkCode == _toggleVk && _toggleDown) {
         _toggleDown = false;
         Emit("UP");
-        return (IntPtr)1;
       }
     }
+    // DCSHUB only observes the configured key. Always continue the hook chain so
+    // the foreground application receives the original key down/up events.
     return CallNextHookEx(_hookId, nCode, wParam, lParam);
   }
 
