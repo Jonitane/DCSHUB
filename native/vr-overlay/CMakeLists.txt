@@ -20,7 +20,7 @@ add_library(DcsHubOpenXrLayer SHARED layer.cpp shared_protocol.h)
 target_compile_features(DcsHubOpenXrLayer PRIVATE cxx_std_17)
 target_compile_definitions(DcsHubOpenXrLayer PRIVATE NOMINMAX)
 target_include_directories(DcsHubOpenXrLayer PRIVATE ${openxr_sdk_SOURCE_DIR}/include)
-target_link_libraries(DcsHubOpenXrLayer PRIVATE d3d11 dxgi)
+target_link_libraries(DcsHubOpenXrLayer PRIVATE d3d11 dxgi advapi32)
 
 add_executable(DcsHubVrBridge bridge.cpp shared_protocol.h)
 target_compile_features(DcsHubVrBridge PRIVATE cxx_std_17)

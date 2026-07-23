@@ -6,8 +6,10 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { UPDATE_AVAILABLE_EVENT } from '@/lib/update-events'
 import type { MajorUpdateInfo } from '@/shared/update-contracts'
+import { useI18n } from '@/lib/i18n'
 
 export default function UpdatePrompt() {
+  const { t } = useI18n()
   const [update, setUpdate] = useState<MajorUpdateInfo | null>(null)
 
   useEffect(() => {
@@ -32,12 +34,12 @@ export default function UpdatePrompt() {
     <DialogContent className="max-w-2xl overflow-hidden border-primary/30 bg-background/95 p-0 shadow-2xl">
       <div className="border-b border-primary/15 bg-gradient-to-r from-primary/15 via-primary/5 to-transparent px-6 py-5">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2.5 text-xl"><span className="flex size-9 items-center justify-center rounded-xl bg-primary/15 ring-1 ring-primary/25"><Sparkles className="size-5 text-primary" /></span>发现 DCSHUB 推送更新</DialogTitle>
-          <DialogDescription className="pt-2"><span>当前版本</span> {update?.currentVersion} · <span>最新版本</span> <span className="font-semibold text-primary">{update?.latestVersion}</span></DialogDescription>
+          <DialogTitle className="flex items-center gap-2.5 text-xl"><span className="flex size-9 items-center justify-center rounded-xl bg-primary/15 ring-1 ring-primary/25"><Sparkles className="size-5 text-primary" /></span>{t('update.available')}</DialogTitle>
+          <DialogDescription className="pt-2"><span>{t('update.currentVersion')}</span> {update?.currentVersion} · <span>{t('update.latestVersion')}</span> <span className="font-semibold text-primary">{update?.latestVersion}</span></DialogDescription>
         </DialogHeader>
       </div>
       <div className="space-y-3 px-6 py-5">
-        <div className="flex items-center gap-2 text-sm font-semibold"><CloudDownload className="size-4 text-primary" />{update?.title || '更新内容'}</div>
+        <div className="flex items-center gap-2 text-sm font-semibold"><CloudDownload className="size-4 text-primary" />{update?.title || t('update.contents')}</div>
         <div data-i18n-ignore="true" className="max-h-[48vh] overflow-y-auto rounded-xl border border-border/40 bg-card/65 px-5 py-4 text-sm leading-7 text-foreground/90">
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
             h1: ({ children }) => <h3 className="mb-3 text-base font-semibold">{children}</h3>,
@@ -51,8 +53,8 @@ export default function UpdatePrompt() {
         </div>
       </div>
       <DialogFooter className="gap-2 border-t border-border/35 bg-card/35 px-6 py-4">
-        <Button variant="outline" onClick={() => setUpdate(null)}>稍后再说</Button>
-        <Button className="gap-2" onClick={() => void openDownload()}><ExternalLink className="size-4" />前往更新</Button>
+        <Button variant="outline" onClick={() => setUpdate(null)}>{t('update.later')}</Button>
+        <Button className="gap-2" onClick={() => void openDownload()}><ExternalLink className="size-4" />{t('update.open')}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>

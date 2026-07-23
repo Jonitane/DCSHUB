@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, CircleAlert, CloudDownload, FolderOpen, Gamepad2, HardDrive, LoaderCircle, Minus, Moon, Package, Plus, RefreshCw, Settings, SlidersHorizontal, Sun, Timer, Trash2 } from 'lucide-react'
+import { ChevronDown, CircleAlert, CloudDownload, FileClock, FolderOpen, Gamepad2, HardDrive, LoaderCircle, Minus, Moon, Package, Plus, RefreshCw, Settings, SlidersHorizontal, Sun, Timer, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -14,20 +14,27 @@ import ManualLibrarySettingsCard from '@/components/ManualLibrarySettingsCard'
 import type { DcsInstallationStatus } from '@/shared/dcs-contracts'
 import type { SoftwareCatalogOverview } from '@/shared/software-catalog-contracts'
 import type { UpdateSettings } from '@/shared/update-contracts'
+import type { HubWindowSettings } from '@/shared/window-contracts'
 import { announceMajorUpdate } from '@/lib/update-events'
 
 type CatalogOperation = 'refresh' | 'detect-all' | 'add' | 'dcs-path' | string
+
+const SETTINGS_CARD_CLASS = 'overflow-hidden border-border/50 bg-card/78 shadow-[0_12px_32px_hsl(var(--background)/0.2)]'
+const SETTINGS_HEADER_CLASS = 'flex w-full items-center gap-3.5 border-b border-transparent bg-background/70 p-5 text-left transition-colors hover:bg-background/85'
+const SETTINGS_ROW_CLASS = 'flex min-h-[72px] items-center justify-between gap-4 rounded-xl border border-border/40 bg-background/42 px-4 py-3'
+const SETTINGS_ICON_CLASS = 'flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-primary/[0.08]'
 
 export default function SettingsPage() {
   const { modules } = useModuleContext()
   const lifecycleModules = useMemo(() => modules.filter((module) => module.capabilities.lifecycle), [modules])
   const lifecycleModuleIds = useMemo(() => lifecycleModules.map((module) => module.id), [lifecycleModules])
   const [settings, setSettings] = useState<AppSettings>(() => loadAppSettings())
-  const [themeOpen, setThemeOpen] = useState(false)
-  const [updatesOpen, setUpdatesOpen] = useState(false)
+  const [hubOpen, setHubOpen] = useState(false)
   const [updateSettings, setUpdateSettings] = useState<UpdateSettings>({ automaticChecks: true })
+  const [hubWindowSettings, setHubWindowSettings] = useState<HubWindowSettings>({ rememberWindowBounds: false })
   const [checkingUpdates, setCheckingUpdates] = useState(false)
   const [softwareOpen, setSoftwareOpen] = useState(false)
+  const [softwarePathsOpen, setSoftwarePathsOpen] = useState(false)
   const [dcsStatus, setDcsStatus] = useState<DcsInstallationStatus | null>(null)
   const [catalog, setCatalog] = useState<SoftwareCatalogOverview | null>(null)
   const [catalogOperation, setCatalogOperation] = useState<CatalogOperation | null>(null)
@@ -46,8 +53,10 @@ export default function SettingsPage() {
   }, [])
 
   useEffect(() => {
-    void window.electronAPI?.updates.settings().then(setUpdateSettings)
-      .catch(() => { /* Keep the default enabled state if settings cannot be read. */ })
+    void Promise.all([
+      window.electronAPI?.updates.settings().then(setUpdateSettings),
+      window.electronAPI?.windowControls.getHubSettings().then(setHubWindowSettings),
+    ]).catch(() => { /* Keep safe defaults if HUB settings cannot be read. */ })
   }, [])
 
   const update = (next: AppSettings) => {
@@ -168,12 +177,29 @@ export default function SettingsPage() {
     }
   }
 
+  const openLogsDirectory = async () => {
+    try {
+      await window.electronAPI?.windowControls.openLogsDirectory()
+    } catch (reason) {
+      toast.error('无法打开日志目录', { description: reason instanceof Error ? reason.message : String(reason) })
+    }
+  }
+
   const setAutomaticUpdateChecks = async (enabled: boolean) => {
     try {
       const next = await window.electronAPI?.updates.setAutomaticChecks(enabled)
       if (next) setUpdateSettings(next)
     } catch (reason) {
       toast.error('保存更新设置失败', { description: reason instanceof Error ? reason.message : String(reason) })
+    }
+  }
+
+  const setRememberWindowBounds = async (enabled: boolean) => {
+    try {
+      const next = await window.electronAPI?.windowControls.setRememberWindowBounds(enabled)
+      if (next) setHubWindowSettings(next)
+    } catch (reason) {
+      toast.error('保存窗口设置失败', { description: reason instanceof Error ? reason.message : String(reason) })
     }
   }
 
@@ -192,36 +218,46 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="mb-6 flex items-center gap-3">
+      <div className="mb-6 flex items-center gap-3 rounded-2xl border border-border/45 bg-background/72 px-4 py-3.5 shadow-sm">
         <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/25"><Settings className="size-5 text-primary" /></div>
-        <h1 className="text-xl font-semibold tracking-tight">设置</h1>
+        <h1 className="text-xl font-bold tracking-wide">设置</h1>
       </div>
 
-      <Card className="overflow-hidden border-border/45 bg-card/75">
-        <button type="button" className="flex w-full items-center gap-3.5 p-5 text-left transition-colors hover:bg-accent/15" onClick={() => setThemeOpen((current) => !current)} aria-expanded={themeOpen}>
-          <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20">{settings.theme === 'dark' ? <Moon className="size-5 text-primary" /> : <Sun className="size-5 text-primary" />}</div>
-          <div className="min-w-0 flex-1"><p className="text-sm font-semibold">主题</p><p className="mt-1 text-xs text-muted-foreground">深色与亮色界面</p></div>
-          <span className="text-xs font-medium text-muted-foreground">{settings.theme === 'dark' ? '深色' : '亮色'}</span>
-          <ChevronDown className={`size-4 text-muted-foreground transition-transform ${themeOpen ? 'rotate-180 text-primary' : ''}`} />
+      <Card className={SETTINGS_CARD_CLASS}>
+        <button type="button" className={`${SETTINGS_HEADER_CLASS} ${hubOpen ? 'border-border/45 bg-background/85' : ''}`} onClick={() => setHubOpen((current) => !current)} aria-expanded={hubOpen}>
+          <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20"><Settings className="size-5 text-primary" /></div>
+          <div className="min-w-0 flex-1"><p className="text-base font-bold tracking-wide">HUB 设置</p><p className="mt-1 text-xs text-muted-foreground">主题、窗口、更新、日志与数据管理</p></div>
+          <ChevronDown className={`size-4 text-muted-foreground transition-transform ${hubOpen ? 'rotate-180 text-primary' : ''}`} />
         </button>
-        {themeOpen && <CardContent className="flex items-center justify-end gap-3 border-t border-border/35 p-5">
-          <span className={`flex items-center gap-1.5 text-xs font-medium ${settings.theme === 'light' ? 'text-primary' : 'text-muted-foreground'}`}><Sun className="size-3.5" />亮色</span>
-          <Switch aria-label="主题模式" checked={settings.theme === 'dark'} onCheckedChange={(checked) => update({ ...settings, theme: checked ? 'dark' : 'light' })} />
-          <span className={`flex items-center gap-1.5 text-xs font-medium ${settings.theme === 'dark' ? 'text-primary' : 'text-muted-foreground'}`}><Moon className="size-3.5" />深色</span>
+        {hubOpen && <CardContent className="space-y-3 bg-card/35 p-5">
+          <div className={SETTINGS_ROW_CLASS}>
+            <div className="flex min-w-0 items-center gap-3"><div className={SETTINGS_ICON_CLASS}>{settings.theme === 'dark' ? <Moon className="size-4 text-primary" /> : <Sun className="size-4 text-primary" />}</div><div><p className="text-sm font-semibold">主题</p><p className="mt-1 text-[11px] text-muted-foreground">切换深色与亮色界面</p></div></div>
+            <div className="flex items-center gap-2"><span className="text-xs text-muted-foreground">亮色</span><Switch aria-label="主题模式" checked={settings.theme === 'dark'} onCheckedChange={(checked) => update({ ...settings, theme: checked ? 'dark' : 'light' })} /><span className="text-xs text-muted-foreground">深色</span></div>
+          </div>
+          <div className={SETTINGS_ROW_CLASS}>
+            <div className="flex min-w-0 items-center gap-3"><div className={SETTINGS_ICON_CLASS}><Settings className="size-4 text-primary" /></div><div className="min-w-0"><p className="text-sm font-semibold">记住主窗口位置和大小</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">下次启动恢复当前窗口；显示器或分辨率改变时自动移回可见区域。</p></div></div>
+            <Switch aria-label="记住主窗口位置和大小" checked={hubWindowSettings.rememberWindowBounds} onCheckedChange={(checked) => void setRememberWindowBounds(checked)} />
+          </div>
+          <div className="rounded-xl border border-border/40 bg-background/42 px-4 py-3">
+            <div className="flex min-h-11 items-center justify-between gap-4"><div className="flex min-w-0 items-center gap-3"><div className={SETTINGS_ICON_CLASS}><CloudDownload className="size-4 text-primary" /></div><div><p className="text-sm font-semibold">更新推送</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">只提示发布者指定推送的版本，日常修复不会弹窗。</p></div></div><Switch aria-label="启动时检查推送版本" checked={updateSettings.automaticChecks} onCheckedChange={(checked) => void setAutomaticUpdateChecks(checked)} /></div>
+            <div className="mt-3 flex items-center justify-between gap-4 border-t border-border/25 pt-3"><p className="text-[10px] text-muted-foreground">只读取 DCSHUB GitHub Releases，不会自动下载或安装。</p><Button variant="outline" size="sm" className="shrink-0 gap-2" onClick={() => void checkForMajorUpdate()} disabled={checkingUpdates}>{checkingUpdates ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}立即检查</Button></div>
+          </div>
+          <div className={`${SETTINGS_ROW_CLASS} flex-wrap`}><div className={SETTINGS_ICON_CLASS}><FileClock className="size-4 text-primary" /></div><div className="min-w-0 flex-1"><p className="text-sm font-semibold">诊断日志</p><p className="mt-1 text-[11px] text-muted-foreground">自动轮转，并隐藏密钥、令牌和用户路径</p></div><Button variant="outline" size="sm" onClick={() => void openLogsDirectory()}><FolderOpen className="size-3.5" />打开日志目录</Button></div>
+          <div className="flex min-h-[72px] flex-wrap items-center gap-4 rounded-xl border border-red-400/20 bg-red-500/[0.035] px-4 py-3"><div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-red-400/15 bg-red-500/[0.08]"><Trash2 className="size-4 text-red-400" /></div><div className="min-w-0 flex-1"><p className="text-sm font-semibold text-red-300">清除所有设置与缓存</p><p className="mt-1 text-[11px] text-muted-foreground">恢复首次运行状态并自动重新启动</p></div><Button variant="destructive" size="sm" onClick={() => setResetOpen(true)}>清除缓存</Button></div>
         </CardContent>}
       </Card>
 
-      <Card className="overflow-hidden border-primary/20 bg-card/80 shadow-[inset_3px_0_0_hsl(var(--primary)/0.7)]">
-        <button type="button" className="flex w-full items-center gap-3.5 p-5 text-left transition-colors hover:bg-accent/15" onClick={() => setSoftwareOpen((current) => !current)} aria-expanded={softwareOpen}>
+      <Card className={SETTINGS_CARD_CLASS}>
+        <button type="button" className={`${SETTINGS_HEADER_CLASS} ${softwareOpen ? 'border-border/45 bg-background/85' : ''}`} onClick={() => setSoftwareOpen((current) => !current)} aria-expanded={softwareOpen}>
           <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20"><HardDrive className="size-5 text-primary" /></div>
-          <div className="min-w-0 flex-1"><p className="text-sm font-semibold">软件设置</p><p className="mt-1 text-xs text-muted-foreground">预设、启动方式、延迟与软件路径</p></div>
+          <div className="min-w-0 flex-1"><p className="text-base font-bold tracking-wide">软件设置</p><p className="mt-1 text-xs text-muted-foreground">预设、启动方式、延迟与软件路径</p></div>
           <span className="rounded-md border border-primary/15 bg-primary/[0.07] px-2 py-1 text-xs text-muted-foreground">{selectedProfile.name} · {enabledSoftwareCount}/{catalog?.items.length || 0}</span>
           <ChevronDown className={`size-4 text-muted-foreground transition-transform ${softwareOpen ? 'rotate-180 text-primary' : ''}`} />
         </button>
 
-        {softwareOpen && <CardContent className="space-y-4 border-t border-border/35 p-5">
-          <section className="space-y-3 rounded-xl border border-primary/15 bg-primary/[0.035] p-3.5">
-            <div className="flex flex-wrap items-center gap-2">
+        {softwareOpen && <CardContent className="space-y-4 bg-card/35 p-5">
+          <section className="overflow-hidden rounded-xl border border-border/40 bg-background/30">
+            <div className="flex flex-wrap items-center gap-2 border-b border-border/35 bg-background/70 p-3.5">
               <div className="mr-auto flex items-center gap-2 text-sm font-semibold"><SlidersHorizontal className="size-4 text-primary" />软件预设</div>
               <Select value={selectedProfile.id} onValueChange={(id) => update({ ...settings, selectedStartupProfileId: id })}>
                 <SelectTrigger aria-label="选择软件预设" className="h-8 w-40"><SelectValue>{selectedProfile.name}</SelectValue></SelectTrigger>
@@ -231,7 +267,7 @@ export default function SettingsPage() {
               <Button size="sm" variant="outline" className="h-8 gap-1.5 px-2.5" onClick={addProfile}><Plus className="size-3.5" />新建</Button>
               <Button aria-label="删除当前软件预设" size="icon" variant="ghost" className="size-8 text-muted-foreground hover:text-destructive" disabled={settings.startupProfiles.length <= 1} onClick={removeProfile}><Trash2 className="size-3.5" /></Button>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-2 p-3.5 sm:grid-cols-2 lg:grid-cols-3">
               {lifecycleModules.map((module) => {
                 const enabled = selectedProfile.moduleIds.includes(module.id)
                 return <div key={module.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/30 bg-background/40 px-3 py-2">
@@ -242,9 +278,15 @@ export default function SettingsPage() {
             </div>
           </section>
 
-          <section className="space-y-3 rounded-xl border border-border/35 bg-background/25 p-3.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="mr-auto flex items-center gap-2 text-sm font-semibold"><HardDrive className="size-4 text-primary" />软件路径与启动</div>
+          <section className="overflow-hidden rounded-xl border border-border/40 bg-background/30">
+            <button type="button" className="flex w-full items-center gap-3 bg-background/70 p-3.5 text-left transition-colors hover:bg-background/85" onClick={() => setSoftwarePathsOpen((current) => !current)} aria-expanded={softwarePathsOpen}>
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-primary/[0.08]"><HardDrive className="size-4 text-primary" /></div>
+              <div className="min-w-0 flex-1"><p className="text-sm font-semibold">软件路径与启动</p><p className="mt-0.5 text-[10px] text-muted-foreground">路径识别、静默启动与启动延迟</p></div>
+              <span className="rounded-md border border-border/35 bg-card/45 px-2 py-1 text-[10px] text-muted-foreground">{enabledSoftwareCount}/{catalog?.items.length || 0} 已接入</span>
+              <ChevronDown className={`size-4 text-muted-foreground transition-transform ${softwarePathsOpen ? 'rotate-180 text-primary' : ''}`} />
+            </button>
+            {softwarePathsOpen && <div className="space-y-3 border-t border-border/35 p-3.5">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button variant="ghost" size="sm" className="h-8 gap-1.5 px-2.5" onClick={() => void refreshSoftwarePaths()} disabled={catalogOperation !== null}>{catalogOperation === 'refresh' ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}刷新</Button>
               <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5" onClick={() => void detectAllBuiltinSoftware()} disabled={catalogOperation !== null}>{catalogOperation === 'detect-all' ? <LoaderCircle className="size-3.5 animate-spin" /> : <HardDrive className="size-3.5" />}自动识别</Button>
               <Button size="sm" className="h-8 gap-1.5 px-2.5" onClick={() => void addSoftware()} disabled={catalogOperation !== null}>{catalogOperation === 'add' ? <LoaderCircle className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}添加软件</Button>
@@ -277,31 +319,12 @@ export default function SettingsPage() {
               ))}
             </div>
             <p className="text-[10px] text-muted-foreground">延迟仅用于一键启动：每个本次新启动的软件从确认运行时独立计时，全部延迟结束后再启动 DCS。关闭接入不会强制结束外部程序。</p>
+            </div>}
           </section>
         </CardContent>}
       </Card>
 
       <ManualLibrarySettingsCard />
-
-      <Card className="overflow-hidden border-border/45 bg-card/75">
-        <button type="button" className="flex w-full items-center gap-3.5 p-5 text-left transition-colors hover:bg-accent/15" onClick={() => setUpdatesOpen((current) => !current)} aria-expanded={updatesOpen}>
-          <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20"><CloudDownload className="size-5 text-primary" /></div>
-          <div className="min-w-0 flex-1"><p className="text-sm font-semibold">更新推送</p><p className="mt-1 text-xs text-muted-foreground">检查发布者指定的版本</p></div>
-          <ChevronDown className={`size-4 text-muted-foreground transition-transform ${updatesOpen ? 'rotate-180 text-primary' : ''}`} />
-        </button>
-        {updatesOpen && <CardContent className="space-y-4 border-t border-border/35 p-5">
-          <div className="flex items-center justify-between gap-4 rounded-xl border border-border/35 bg-background/45 px-4 py-3">
-            <div className="min-w-0"><p className="text-sm font-medium">启动时检查推送版本</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">日常修复和未指定推送的 Release 不会弹窗。</p></div>
-            <Switch aria-label="启动时检查推送版本" checked={updateSettings.automaticChecks} onCheckedChange={(checked) => void setAutomaticUpdateChecks(checked)} />
-          </div>
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-[10px] text-muted-foreground">只读取 DCSHUB GitHub Releases，不会自动下载或安装。</p>
-            <Button variant="outline" size="sm" className="shrink-0 gap-2" onClick={() => void checkForMajorUpdate()} disabled={checkingUpdates}>{checkingUpdates ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}立即检查</Button>
-          </div>
-        </CardContent>}
-      </Card>
-
-      <Card className="border-red-400/20 bg-red-500/[0.025]"><CardContent className="flex flex-wrap items-center gap-4 p-5"><div className="flex size-10 items-center justify-center rounded-xl bg-red-500/10 ring-1 ring-red-400/20"><Trash2 className="size-5 text-red-400" /></div><div className="min-w-0 flex-1"><p className="text-sm font-semibold text-red-300">清除所有设置与缓存</p><p className="mt-1 text-xs text-muted-foreground">恢复 DCSHUB 首次运行状态并自动重新启动</p></div><Button variant="destructive" size="sm" onClick={() => setResetOpen(true)}>清除缓存</Button></CardContent></Card>
 
       <Dialog open={resetOpen} onOpenChange={(next) => { if (!resetting) setResetOpen(next) }}><DialogContent><DialogHeader><DialogTitle className="flex items-center gap-2 text-red-300"><CircleAlert className="size-5" />确认清除全部 DCSHUB 数据？</DialogTitle><DialogDescription>这会删除软件路径、软件预设、模组管理状态、超级手册索引、API Key、主题和语言等设置，然后自动重启。不会删除用户手册原文件、模组仓库、游戏文件或备份目录中的文件。</DialogDescription></DialogHeader><DialogFooter className="mt-6 gap-2"><Button variant="outline" onClick={() => setResetOpen(false)} disabled={resetting}>取消</Button><Button variant="destructive" onClick={() => void resetAllUserData()} disabled={resetting}>{resetting ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}清除并重新启动</Button></DialogFooter></DialogContent></Dialog>
     </div>

@@ -2,7 +2,7 @@
 
 DCSHUB 是面向 DCS World 玩家的 Windows 桌面管理工具，用于统一启动飞行所需的软件、管理本地模组，并通过本地手册索引和 DeepSeek 提供可核对原文的问答能力。
 
-当前源码版本：V2.2.1
+当前本地测试版本：V2.5.0-local.1
 
 下载地址：[GitHub Releases](https://github.com/Jonitane/DCSHUB/releases/latest)
 
@@ -126,7 +126,7 @@ DCSHUB 是玩家社区独立项目，与 Eagle Dynamics 及所接入软件的厂
 
 ## 开发与验证
 
-开发环境：Windows 10/11 x64、Node.js 20 LTS、npm。
+开发环境：Windows 10/11 x64、Node.js 20+、npm、.NET 10 SDK，以及构建 OpenXR 组件所需的 Visual Studio C++ 工具。
 
 ```powershell
 npm install
@@ -141,8 +141,10 @@ npm run build
 
 ```text
 electron/builtins/       DCS 启动、模组管理、超级手册、更新和 VR 服务
+electron/core/           AppCore、独立 Core 客户端、事件总线和兼容降级
 electron/integrations/   外部软件适配器
 electron/modules/        模块生命周期、状态、日志和调度
+core/                    .NET 10 协议层、Windows 平台层、Core Host 与测试
 native/vr-overlay/       OpenXR API Layer、共享协议和帧桥接程序
 src/components/          通用界面组件
 src/pages/               仪表板、超级手册、模组管理器和设置页面
@@ -150,7 +152,9 @@ src/shared/              Main、Preload 与 Renderer 的共享类型契约
 tests/                   核心服务集成测试
 ```
 
-详细版本记录见 [CHANGELOG.md](CHANGELOG.md)，V2.2.0 的完整说明见 [docs/releases/V2.2.0.md](docs/releases/V2.2.0.md)。
+详细版本记录见 [CHANGELOG.md](CHANGELOG.md)，核心架构与后续 DCS/语音扩展边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，V2.5.1 的完整说明见 [docs/releases/V2.5.1.md](docs/releases/V2.5.1.md)。
+
+项目维护、账号迁移、发布流程、用户数据和已核实的重构建议见 [项目维护交接说明](docs/HANDOVER.md)。
 
 ## 参与项目
 

@@ -1,40 +1,59 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, safeStorage, screen, session, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import type { ModuleChangedEvent, ModuleLogEntry, ModuleSettings } from '../src/shared/module-contracts'
-import { ModuleManager } from './modules/ModuleManager'
-import { createEyeMouseDriver } from './integrations/eye-mouse/driver'
-import { createMozaCockpitDriver } from './integrations/moza-cockpit/driver'
-import { createPimaxVrDriver } from './integrations/pimax-vr/driver'
-import { createAimxyZDriver } from './integrations/aimxyz/driver'
-import { createVoxBindDriver } from './integrations/voxbind/driver'
-import { createSrsDriver } from './integrations/srs/driver'
-import { ModManagerService } from './builtins/mod-manager/service'
-import { DcsLaunchService } from './builtins/dcs-launch/service'
-import type { ModManagerSettings } from '../src/shared/mod-manager-contracts'
-import { SoftwareCatalogService } from './builtins/software-catalog/service'
-import { ManualLibraryService } from './builtins/manual-library/service'
-import { UpdateService } from './builtins/update/service'
-import { VrOverlayService } from './builtins/vr-overlay/service'
+import { fileURLToPath } from 'node:url'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { APP_VERSION, UPDATE_DOWNLOAD_URL } from '../src/shared/app-meta'
-import type { OverlayDisplayMode, VrOverlayStatus } from '../src/shared/window-contracts'
+import type { HubWindowSettings, OverlayDisplayMode, SpeechModelStatus, SpeechRecognitionState, VrOverlayStatus } from '../src/shared/window-contracts'
+import { RateLimitedLogger } from './logging/rate-limited-logger'
+import { DiagnosticLogger } from './logging/diagnostic-logger'
+import { AppCore } from './core/app-core'
+import focusDcsScript from './native/windows/focus-dcs.ps1?raw'
+import keyboardHookSource from './native/windows/keyboard-hook.cs?raw'
+import { assertModManagerSettings, assertModuleId, assertModuleIds, assertText } from './ipc/validation'
+import { registerModuleIpc } from './ipc/modules'
+import { registerDcsIpc } from './ipc/dcs'
+import { registerManualLibraryIpc } from './ipc/manual-library'
+import { normalizeDcsSpeechTranscript } from './builtins/manual-library/speech-normalizer'
 
 interface OverlaySettings {
+  schemaVersion: number
   hotkey: string
+  microphoneId: string | null
   opacity: number
   width: number
   height: number
+  vrWidth: number
+  vrHeight: number
   enabled: boolean
 }
 
+interface MainWindowBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface StoredHubSettings extends HubWindowSettings {
+  windowBounds: MainWindowBounds | null
+}
+
 const DEFAULT_OVERLAY_SETTINGS: OverlaySettings = {
-  hotkey: 'F9',
+  schemaVersion: 2,
+  hotkey: 'Ctrl+Alt+M',
+  microphoneId: null,
   opacity: 0.92,
   width: 680,
   height: 780,
+  vrWidth: 1200,
+  vrHeight: 750,
   enabled: true,
+}
+
+const DEFAULT_HUB_SETTINGS: StoredHubSettings = {
+  rememberWindowBounds: false,
+  windowBounds: null,
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -66,24 +85,124 @@ process.env.VITE_PUBLIC = process.env.VITE_DEV_SERVER_URL
 
 let win: BrowserWindow | null = null
 let overlayWin: BrowserWindow | null = null
-let modManager: ModManagerService | null = null
-let dcsLaunch: DcsLaunchService | null = null
-let softwareCatalog: SoftwareCatalogService | null = null
-let manualLibrary: ManualLibraryService | null = null
-let updateService: UpdateService | null = null
-let vrOverlay: VrOverlayService | null = null
+let core: AppCore | null = null
 let overlaySettings: OverlaySettings = { ...DEFAULT_OVERLAY_SETTINGS }
+let hubSettings: StoredHubSettings = { ...DEFAULT_HUB_SETTINGS }
+let windowBoundsSaveTimer: ReturnType<typeof setTimeout> | null = null
+let overlaySizeSaveTimer: ReturnType<typeof setTimeout> | null = null
 let overlayDisplayMode: OverlayDisplayMode = 'desktop'
 let overlayUserVisible = false
 let vrCaptureTimer: ReturnType<typeof setInterval> | null = null
 let vrCaptureInFlight = false
 let vrCaptureEpoch = 0
 const VR_CAPTURE_INTERVAL_MS = 16
-let dcsProcessRunning = false
-let dcsCheckTimer: ReturnType<typeof setInterval> | null = null
 const manualViewerWindows = new Set<BrowserWindow>()
-const moduleManager = new ModuleManager()
+const diagnosticLogDirectory = path.join(app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(), 'logs')
+const diagnosticLogger = new DiagnosticLogger(diagnosticLogDirectory)
+const mainLogger = new RateLimitedLogger('DCSHUB/main', 30_000, (key, message, error, detail) => diagnosticLogger.warn('main', key, error, { message, ...detail }))
 let quitCleanupStarted = false
+const SENSEVOICE_MODEL_NAME = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17'
+const SENSEVOICE_MODEL_URL = `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${SENSEVOICE_MODEL_NAME}.tar.bz2`
+let speechModelDownload: Promise<SpeechModelStatus> | null = null
+let speechModelProgress = 0
+let speechModelError: string | null = null
+let speechRecording = false
+let speechStarting: Promise<void> | null = null
+let speechFinishing = false
+let hotkeyPressTimer: ReturnType<typeof setTimeout> | null = null
+let hotkeyLongPress = false
+let hotkeyPressedAt = 0
+const SPEECH_HOLD_THRESHOLD_MS = 320
+const SPEECH_HOLD_RELEASE_GRACE_MS = 45
+const SPEECH_RELEASE_AUDIO_TAIL_MS = 240
+const SHUTDOWN_CLEANUP_TIMEOUT_MS = 15_000
+
+function senseVoiceModelDirectory(): string {
+  return path.join(app.getPath('userData'), 'speech-models', 'sensevoice')
+}
+
+function speechModelStatus(): SpeechModelStatus {
+  const directory = senseVoiceModelDirectory()
+  return {
+    installed: fs.existsSync(path.join(directory, 'model.int8.onnx')) && fs.existsSync(path.join(directory, 'tokens.txt')),
+    downloading: speechModelDownload !== null,
+    progress: speechModelProgress,
+    modelDirectory: directory,
+    error: speechModelError,
+  }
+}
+
+function broadcastSpeechModelStatus(): SpeechModelStatus {
+  const status = speechModelStatus()
+  win?.webContents.send('overlay:speech-model-progress', status)
+  overlayWin?.webContents.send('overlay:speech-model-progress', status)
+  return status
+}
+
+function sendSpeechState(state: SpeechRecognitionState): void {
+  win?.webContents.send('overlay:speech-state', state)
+  overlayWin?.webContents.send('overlay:speech-state', state)
+}
+
+async function downloadSenseVoiceModel(): Promise<SpeechModelStatus> {
+  if (speechModelStatus().installed) return speechModelStatus()
+  if (speechModelDownload) return await speechModelDownload
+  speechModelDownload = (async () => {
+    const parent = path.dirname(senseVoiceModelDirectory())
+    const archive = path.join(app.getPath('temp'), `${SENSEVOICE_MODEL_NAME}-${process.pid}.tar.bz2`)
+    const extracted = path.join(parent, SENSEVOICE_MODEL_NAME)
+    fs.mkdirSync(parent, { recursive: true })
+    speechModelError = null
+    speechModelProgress = 0
+    broadcastSpeechModelStatus()
+    try {
+      const response = await fetch(SENSEVOICE_MODEL_URL, { redirect: 'follow', signal: AbortSignal.timeout(30 * 60_000) })
+      if (!response.ok || !response.body) throw new Error(`模型下载失败：HTTP ${response.status}`)
+      const total = Number(response.headers.get('content-length')) || 0
+      const reader = response.body.getReader()
+      const output = fs.createWriteStream(archive)
+      let received = 0
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (!output.write(Buffer.from(value))) await new Promise<void>((resolve) => output.once('drain', resolve))
+        received += value.byteLength
+        const nextProgress = total > 0 ? Math.min(92, Math.round(received / total * 92)) : Math.min(90, speechModelProgress + 1)
+        if (nextProgress !== speechModelProgress) {
+          speechModelProgress = nextProgress
+          broadcastSpeechModelStatus()
+        }
+      }
+      await new Promise<void>((resolve, reject) => output.end((error?: Error | null) => error ? reject(error) : resolve()))
+      fs.rmSync(extracted, { recursive: true, force: true })
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn('tar.exe', ['-xjf', archive, '-C', parent], { windowsHide: true, stdio: 'ignore' })
+        child.once('error', reject)
+        child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`模型解压失败：tar ${code}`)))
+      })
+      fs.rmSync(senseVoiceModelDirectory(), { recursive: true, force: true })
+      fs.renameSync(extracted, senseVoiceModelDirectory())
+      speechModelProgress = 100
+      return broadcastSpeechModelStatus()
+    } catch (reason) {
+      speechModelError = reason instanceof Error ? reason.message : String(reason)
+      throw reason
+    } finally {
+      try { fs.rmSync(archive, { force: true }) } catch { /* temporary download cleanup */ }
+      speechModelDownload = null
+      broadcastSpeechModelStatus()
+    }
+  })()
+  return await speechModelDownload
+}
+
+function requireCore(): AppCore {
+  if (!core) throw new Error('DCSHUB Core 尚未初始化')
+  return core
+}
+
+process.on('uncaughtExceptionMonitor', (error, origin) => diagnosticLogger.emergency('process', 'uncaught-exception', error, { origin }))
+process.on('unhandledRejection', (reason) => diagnosticLogger.error('process', 'unhandled-rejection', reason))
 
 function getOverlaySettingsPath(): string {
   return path.join(app.getPath('userData'), 'overlay-settings.json')
@@ -93,14 +212,23 @@ function loadOverlaySettings(): void {
   try {
     const raw = fs.readFileSync(getOverlaySettingsPath(), 'utf8')
     const parsed = JSON.parse(raw) as Partial<OverlaySettings>
+    const storedHotkey = typeof parsed.hotkey === 'string' && parsed.hotkey ? parsed.hotkey : DEFAULT_OVERLAY_SETTINGS.hotkey
+    const legacyDefaultHotkey = parsed.schemaVersion !== DEFAULT_OVERLAY_SETTINGS.schemaVersion
+      && storedHotkey.trim().toLocaleUpperCase() === 'F9'
     overlaySettings = {
-      hotkey: typeof parsed.hotkey === 'string' && parsed.hotkey ? parsed.hotkey : DEFAULT_OVERLAY_SETTINGS.hotkey,
+      schemaVersion: DEFAULT_OVERLAY_SETTINGS.schemaVersion,
+      hotkey: legacyDefaultHotkey ? DEFAULT_OVERLAY_SETTINGS.hotkey : storedHotkey,
+      microphoneId: typeof parsed.microphoneId === 'string' && parsed.microphoneId ? parsed.microphoneId : null,
       opacity: typeof parsed.opacity === 'number' && parsed.opacity >= 0.3 && parsed.opacity <= 1 ? parsed.opacity : DEFAULT_OVERLAY_SETTINGS.opacity,
       width: typeof parsed.width === 'number' && parsed.width >= 400 && parsed.width <= 2000 ? parsed.width : DEFAULT_OVERLAY_SETTINGS.width,
       height: typeof parsed.height === 'number' && parsed.height >= 300 && parsed.height <= 1600 ? parsed.height : DEFAULT_OVERLAY_SETTINGS.height,
+      vrWidth: typeof parsed.vrWidth === 'number' && parsed.vrWidth >= 400 && parsed.vrWidth <= 2000 ? parsed.vrWidth : DEFAULT_OVERLAY_SETTINGS.vrWidth,
+      vrHeight: typeof parsed.vrHeight === 'number' && parsed.vrHeight >= 300 && parsed.vrHeight <= 1600 ? parsed.vrHeight : DEFAULT_OVERLAY_SETTINGS.vrHeight,
       enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULT_OVERLAY_SETTINGS.enabled,
     }
-  } catch {
+    if (parsed.schemaVersion !== DEFAULT_OVERLAY_SETTINGS.schemaVersion) saveOverlaySettings()
+  } catch (error) {
+    mainLogger.warn('load-overlay-settings', '悬浮窗设置读取失败，已使用默认值', error)
     overlaySettings = { ...DEFAULT_OVERLAY_SETTINGS }
   }
 }
@@ -108,7 +236,100 @@ function loadOverlaySettings(): void {
 function saveOverlaySettings(): void {
   try {
     fs.writeFileSync(getOverlaySettingsPath(), JSON.stringify(overlaySettings, null, 2), 'utf8')
-  } catch { /* ignore */ }
+  } catch (error) {
+    mainLogger.warn('save-overlay-settings', '悬浮窗设置保存失败', error)
+  }
+}
+
+function rememberCurrentOverlaySize(): void {
+  if (!overlayWin || overlayWin.isDestroyed()) return
+  const [width, height] = overlayWin.getSize()
+  if (overlayDisplayMode === 'vr') {
+    overlaySettings.vrWidth = width
+    overlaySettings.vrHeight = height
+  } else {
+    overlaySettings.width = width
+    overlaySettings.height = height
+  }
+  saveOverlaySettings()
+}
+
+function scheduleOverlaySizeSave(): void {
+  if (overlaySizeSaveTimer) clearTimeout(overlaySizeSaveTimer)
+  overlaySizeSaveTimer = setTimeout(() => {
+    overlaySizeSaveTimer = null
+    rememberCurrentOverlaySize()
+  }, 250)
+}
+
+function getHubSettingsPath(): string {
+  return path.join(app.getPath('userData'), 'hub-settings.json')
+}
+
+function isMainWindowBounds(value: unknown): value is MainWindowBounds {
+  if (!value || typeof value !== 'object') return false
+  const bounds = value as Partial<MainWindowBounds>
+  return [bounds.x, bounds.y, bounds.width, bounds.height].every((part) => typeof part === 'number' && Number.isFinite(part))
+    && (bounds.width ?? 0) >= 960
+    && (bounds.height ?? 0) >= 640
+}
+
+function loadHubSettings(): void {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(getHubSettingsPath(), 'utf8')) as Partial<StoredHubSettings>
+    hubSettings = {
+      rememberWindowBounds: parsed.rememberWindowBounds === true,
+      windowBounds: isMainWindowBounds(parsed.windowBounds) ? parsed.windowBounds : null,
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') mainLogger.warn('load-hub-settings', 'HUB 设置读取失败，已使用默认值', error)
+    hubSettings = { ...DEFAULT_HUB_SETTINGS }
+  }
+}
+
+function saveHubSettings(): void {
+  try {
+    fs.mkdirSync(path.dirname(getHubSettingsPath()), { recursive: true })
+    fs.writeFileSync(getHubSettingsPath(), JSON.stringify(hubSettings, null, 2), 'utf8')
+  } catch (error) {
+    mainLogger.warn('save-hub-settings', 'HUB 设置保存失败', error)
+  }
+}
+
+function visibleMainWindowBounds(): MainWindowBounds | null {
+  const saved = hubSettings.windowBounds
+  if (!hubSettings.rememberWindowBounds || !saved) return null
+  const displays = screen.getAllDisplays()
+  const isVisible = displays.some(({ workArea }) => {
+    const overlapWidth = Math.min(saved.x + saved.width, workArea.x + workArea.width) - Math.max(saved.x, workArea.x)
+    const overlapHeight = Math.min(saved.y + saved.height, workArea.y + workArea.height) - Math.max(saved.y, workArea.y)
+    return overlapWidth >= 120 && overlapHeight >= 80
+  })
+  if (!isVisible) return null
+  const workArea = screen.getDisplayMatching(saved).workArea
+  const width = Math.min(Math.max(saved.width, 960), workArea.width)
+  const height = Math.min(Math.max(saved.height, 640), workArea.height)
+  return {
+    width,
+    height,
+    x: Math.min(Math.max(saved.x, workArea.x - width + 120), workArea.x + workArea.width - 120),
+    y: Math.min(Math.max(saved.y, workArea.y), workArea.y + workArea.height - 80),
+  }
+}
+
+function rememberCurrentWindowBounds(): void {
+  if (!hubSettings.rememberWindowBounds || !win || win.isDestroyed() || win.isMinimized()) return
+  hubSettings.windowBounds = win.getNormalBounds()
+  saveHubSettings()
+}
+
+function scheduleWindowBoundsSave(): void {
+  if (!hubSettings.rememberWindowBounds) return
+  if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer)
+  windowBoundsSaveTimer = setTimeout(() => {
+    windowBoundsSaveTimer = null
+    rememberCurrentWindowBounds()
+  }, 250)
 }
 
 interface ParsedHotkey { vkCode: number; mods: number }
@@ -156,21 +377,9 @@ function parseElectronAccelerator(accelerator: string): ParsedHotkey | null {
   return { vkCode, mods }
 }
 
-function isDcsProcessRunning(): boolean {
-  try {
-    const result = execFileSync('powershell', [
-      '-NoProfile', '-Command',
-      'Get-Process -Name "DCS" -ErrorAction SilentlyContinue | Select-Object -First 1 Id'
-    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 2000 }).trim()
-    return result.length > 0
-  } catch {
-    return false
-  }
-}
-
 let lastOverlayToggleAt = 0
 const OVERLAY_TOGGLE_DEBOUNCE_MS = 250
-function toggleOverlay(): void {
+async function toggleOverlay(): Promise<void> {
   if (!overlaySettings.enabled) return
   const now = Date.now()
   if (now - lastOverlayToggleAt < OVERLAY_TOGGLE_DEBOUNCE_MS) return
@@ -178,11 +387,9 @@ function toggleOverlay(): void {
   if (overlayUserVisible) {
     setOverlayVisibility(false)
   } else {
-    if (!dcsProcessRunning && !isDcsProcessRunning()) {
-      dcsProcessRunning = false
-      return
-    }
-    dcsProcessRunning = true
+    const currentCore = core
+    if (!currentCore) return
+    if (!await currentCore.isDcsRunning(true)) return
     setOverlayVisibility(true)
   }
 }
@@ -205,8 +412,8 @@ function showOverlay(): void {
     // window focusable so mouse dragging, controls and explicit text input work.
     overlayWin.setFocusable(true)
     overlayWin.showInactive()
-    vrOverlay?.beginFrames()
-    vrOverlay?.requestRecenter()
+    core?.vrOverlay.beginFrames()
+    core?.vrOverlay.requestRecenter()
     startVrFrameCapture()
   } else {
     overlayWin.setFocusable(true)
@@ -220,7 +427,7 @@ function showOverlay(): void {
 function hideOverlay(): void {
   overlayUserVisible = false
   stopVrFrameCapture()
-  vrOverlay?.publishInactive()
+  core?.vrOverlay.publishInactive()
   if (overlayWin && !overlayWin.isDestroyed()) {
     overlayWin.setIgnoreMouseEvents(true, { forward: true })
     overlayWin.blur()
@@ -252,8 +459,10 @@ async function captureVrOverlayFrame(): Promise<void> {
     const height = Math.max(1, Math.round(sourceSize.height * scale))
     const frame = scale < 1 ? source.resize({ width, height, quality: 'best' }) : source
     if (captureEpoch !== vrCaptureEpoch || !overlayUserVisible) return
-    vrOverlay?.publishFrame(frame.toBitmap(), width, height)
-  } catch { /* the next capture tick retries */ }
+    core?.vrOverlay.publishFrame(frame.toBitmap(), width, height)
+  } catch (error) {
+    mainLogger.warn('vr-frame-capture', 'VR 手册画面捕获失败，将自动重试', error)
+  }
   finally {
     // A stale capture must not reset the in-flight state of a newer session.
     if (captureEpoch === vrCaptureEpoch) vrCaptureInFlight = false
@@ -285,8 +494,8 @@ function configureOverlayWindowForMode(mode: OverlayDisplayMode): void {
     })
     return
   }
-  const width = Math.min(display.workArea.width, 1200)
-  const height = Math.min(display.workArea.height, 750)
+  const width = Math.min(display.workArea.width, overlaySettings.vrWidth)
+  const height = Math.min(display.workArea.height, overlaySettings.vrHeight)
   overlayWin.setBounds({
     x: display.workArea.x + Math.round((display.workArea.width - width) / 2),
     y: display.workArea.y + Math.round((display.workArea.height - height) / 2),
@@ -297,40 +506,8 @@ function configureOverlayWindowForMode(mode: OverlayDisplayMode): void {
 
 function focusDcsWindow(): void {
   if (process.platform !== 'win32') return
-  const script = `
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class DcsHubFocusTarget {
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
-  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
-  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-
-  public static void Restore(IntPtr target) {
-    if (target == IntPtr.Zero) return;
-    IntPtr foreground = GetForegroundWindow();
-    uint foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, IntPtr.Zero);
-    uint currentThread = GetCurrentThreadId();
-    bool attached = foregroundThread != 0 && foregroundThread != currentThread && AttachThreadInput(currentThread, foregroundThread, true);
-    try {
-      ShowWindowAsync(target, 5);
-      BringWindowToTop(target);
-      SetForegroundWindow(target);
-    } finally {
-      if (attached) AttachThreadInput(currentThread, foregroundThread, false);
-    }
-  }
-}
-'@
-$process = Get-Process -Name 'DCS' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if ($process) { [DcsHubFocusTarget]::Restore($process.MainWindowHandle) }
-`
   try {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', focusDcsScript], {
       windowsHide: true,
       stdio: 'ignore',
       detached: false,
@@ -356,202 +533,105 @@ function endVrOverlayTextInput(): void {
 
 function applyOverlayDisplayMode(mode: OverlayDisplayMode): VrOverlayStatus {
   overlayDisplayMode = mode
-  const status = vrOverlay?.setDisplayMode(mode) || { mode, available: false, bridgeRunning: false, error: 'VR overlay service is unavailable' }
+  const status = core?.vrOverlay.setDisplayMode(mode) || { mode, available: false, bridgeRunning: false, error: 'VR overlay service is unavailable' }
   configureOverlayWindowForMode(mode)
   if (mode === 'vr' && overlayUserVisible) startVrFrameCapture()
   else {
     stopVrFrameCapture()
-    vrOverlay?.publishInactive()
+    core?.vrOverlay.publishInactive()
   }
   win?.webContents.send('overlay:display-mode-changed', status)
   overlayWin?.webContents.send('overlay:display-mode-changed', status)
   return status
 }
 
-function startDcsProcessMonitor(): void {
-  if (dcsCheckTimer) return
-  dcsProcessRunning = isDcsProcessRunning()
-  dcsCheckTimer = setInterval(() => {
-    const running = isDcsProcessRunning()
-    if (running !== dcsProcessRunning) {
-      dcsProcessRunning = running
-      if (!running && overlayUserVisible) {
-        setOverlayVisibility(false)
-      }
-    }
-  }, 3000)
-}
-
-function stopDcsProcessMonitor(): void {
-  if (dcsCheckTimer) {
-    clearInterval(dcsCheckTimer)
-    dcsCheckTimer = null
-  }
-}
-
 let hotkeyHookProcess: ChildProcess | null = null
 
-const KBD_HOOK_CSHARP = `
-using System;
-using System.Runtime.InteropServices;
-using System.Threading;
-using System.Diagnostics;
+function overlayHotkeyDown(): void {
+  if (hotkeyPressTimer || hotkeyLongPress) return
+  hotkeyLongPress = false
+  hotkeyPressedAt = Date.now()
+  hotkeyPressTimer = setTimeout(() => {
+    hotkeyPressTimer = null
+    activateSpeechLongPress()
+  }, SPEECH_HOLD_THRESHOLD_MS)
+}
 
-public static class DcsHubKbdHook {
-  private const int WH_KEYBOARD_LL = 13;
-  private const int WM_KEYDOWN = 0x0100;
-  private const int WM_SYSKEYDOWN = 0x0104;
-  private const int WM_KEYUP = 0x0101;
-  private const int WM_SYSKEYUP = 0x0105;
-  private const int WM_QUIT = 0x0012;
-  private const int VK_LSHIFT = 0xA0;
-  private const int VK_RSHIFT = 0xA1;
-  private const int VK_LCONTROL = 0xA2;
-  private const int VK_RCONTROL = 0xA3;
-  private const int VK_LMENU = 0xA4;
-  private const int VK_RMENU = 0xA5;
-  private const int VK_LWIN = 0x5B;
-  private const int VK_RWIN = 0x5C;
-  private const int MOD_ALT = 0x01;
-  private const int MOD_CTRL = 0x02;
-  private const int MOD_SHIFT = 0x04;
-  private const int MOD_WIN = 0x08;
-  private const int MOD_MASK = 0x0F;
+function activateSpeechLongPress(): void {
+  if (hotkeyLongPress) return
+  hotkeyLongPress = true
+  void beginSpeechQuestion()
+}
 
-  private static IntPtr _hookId = IntPtr.Zero;
-  private static HookProc _proc;
-  private static int _toggleVk;
-  private static int _toggleMods;
-  private static int _currentMods;
-  private static bool _toggleDown;
-  private static int _parentPid;
-
-  [StructLayout(LayoutKind.Sequential)]
-  private struct MSG {
-    public IntPtr hwnd;
-    public uint message;
-    public IntPtr wParam;
-    public IntPtr lParam;
-    public uint time;
-    public int pt_x;
-    public int pt_y;
-  }
-
-  public delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-  [DllImport("user32.dll", SetLastError=true)]
-  private static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
-  [DllImport("user32.dll", SetLastError=true)]
-  private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-  [DllImport("user32.dll")]
-  private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-  [DllImport("user32.dll")]
-  private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
-  [DllImport("user32.dll")]
-  private static extern bool TranslateMessage([In] ref MSG lpMsg);
-  [DllImport("user32.dll")]
-  private static extern IntPtr DispatchMessage([In] ref MSG lpMsg);
-  [DllImport("user32.dll")]
-  private static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);
-  [DllImport("kernel32.dll")]
-  private static extern uint GetCurrentThreadId();
-
-  private static void UpdateMod(int vkCode, bool isDown) {
-    int mod = 0;
-    if (vkCode == VK_LSHIFT || vkCode == VK_RSHIFT) mod = MOD_SHIFT;
-    else if (vkCode == VK_LCONTROL || vkCode == VK_RCONTROL) mod = MOD_CTRL;
-    else if (vkCode == VK_LMENU || vkCode == VK_RMENU) mod = MOD_ALT;
-    else if (vkCode == VK_LWIN || vkCode == VK_RWIN) mod = MOD_WIN;
-    if (mod == 0) return;
-    if (isDown) _currentMods |= mod;
-    else _currentMods &= ~mod;
-  }
-
-  private static void Emit(string action) {
-    Console.Out.WriteLine(action);
-    Console.Out.Flush();
-  }
-
-  private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
-    if (nCode >= 0) {
-      int vkCode = Marshal.ReadInt32(lParam);
-      int msg = wParam.ToInt32();
-      bool isDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
-      bool isUp = (msg == WM_KEYUP || msg == WM_SYSKEYUP);
-
-      UpdateMod(vkCode, isDown);
-
-      if (isDown && vkCode == _toggleVk && ((_currentMods & MOD_MASK) == _toggleMods)) {
-        if (!_toggleDown) Emit("TOGGLE");
-        _toggleDown = true;
-        return (IntPtr)1;
-      }
-      if (isUp && vkCode == _toggleVk && _toggleDown) {
-        _toggleDown = false;
-        return (IntPtr)1;
-      }
+function overlayHotkeyUp(): void {
+  const heldForMs = hotkeyPressedAt > 0 ? Date.now() - hotkeyPressedAt : 0
+  hotkeyPressedAt = 0
+  if (hotkeyPressTimer) {
+    clearTimeout(hotkeyPressTimer)
+    hotkeyPressTimer = null
+    if (heldForMs >= SPEECH_HOLD_THRESHOLD_MS - SPEECH_HOLD_RELEASE_GRACE_MS) {
+      activateSpeechLongPress()
+      hotkeyLongPress = false
+      void finishSpeechQuestion()
+      return
     }
-    return CallNextHookEx(_hookId, nCode, wParam, lParam);
+    void toggleOverlay()
+    return
   }
+  if (!hotkeyLongPress) return
+  hotkeyLongPress = false
+  void finishSpeechQuestion()
+}
 
-  private static bool IsParentAlive() {
-    if (_parentPid <= 0) return true;
-    try {
-      Process p = Process.GetProcessById(_parentPid);
-      if (p.HasExited) return false;
-      return true;
-    } catch {
-      return false;
+function beginSpeechQuestion(): Promise<void> {
+  if (speechStarting) return speechStarting
+  speechStarting = startSpeechQuestion().finally(() => {
+    speechStarting = null
+  })
+  return speechStarting
+}
+
+async function startSpeechQuestion(): Promise<void> {
+  try {
+    if (!speechModelStatus().installed) {
+      showOverlay()
+      sendSpeechState({ state: 'error', message: '请先在“设置 → 超级手册 → 内置手册窗口”下载 SenseVoice 语音模型' })
+      return
     }
-  }
-
-  public static void Start(string[] args) {
-    if (args.Length < 2) return;
-    _toggleVk = int.Parse(args[0]);
-    _toggleMods = int.Parse(args[1]);
-    _parentPid = args.Length >= 3 ? int.Parse(args[2]) : 0;
-    _currentMods = 0;
-    _toggleDown = false;
-    _proc = HookCallback;
-    _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, IntPtr.Zero, 0);
-    if (_hookId == IntPtr.Zero) {
-      Console.Out.WriteLine("HOOK_FAILED");
-      Console.Out.Flush();
-      return;
-    }
-    Console.Out.WriteLine("HOOK_READY");
-    Console.Out.Flush();
-
-    uint threadId = GetCurrentThreadId();
-
-    Thread stdinMonitor = new Thread(() => {
-      try { Console.In.ReadLine(); } catch { }
-      try { PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero); } catch { }
-    });
-    stdinMonitor.IsBackground = true;
-    stdinMonitor.Start();
-
-    Thread parentMonitor = new Thread(() => {
-      while (true) {
-        Thread.Sleep(1000);
-        if (!IsParentAlive()) {
-          try { PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero); } catch { }
-          return;
-        }
-      }
-    });
-    parentMonitor.IsBackground = true;
-    parentMonitor.Start();
-
-    MSG msg;
-    while (GetMessage(out msg, IntPtr.Zero, 0, 0) > 0) {
-      TranslateMessage(ref msg);
-      DispatchMessage(ref msg);
-    }
-    try { UnhookWindowsHookEx(_hookId); } catch { }
+    showOverlay()
+    await requireCore().startSpeech(overlaySettings.microphoneId)
+    speechRecording = true
+    sendSpeechState({ state: 'recording', message: '正在录音，松开按键后提问' })
+  } catch (reason) {
+    speechRecording = false
+    sendSpeechState({ state: 'error', message: reason instanceof Error ? reason.message : String(reason) })
   }
 }
-`
+
+async function finishSpeechQuestion(): Promise<void> {
+  if (speechFinishing) return
+  speechFinishing = true
+  try {
+    if (speechStarting) await speechStarting
+    if (!speechRecording) return
+    sendSpeechState({ state: 'recording', message: '正在收尾录音，请稍候…' })
+    await new Promise((resolve) => setTimeout(resolve, SPEECH_RELEASE_AUDIO_TAIL_MS))
+    speechRecording = false
+    sendSpeechState({ state: 'recognizing', message: '正在识别语音' })
+    const result = await requireCore().stopSpeech(senseVoiceModelDirectory())
+    const normalizedText = normalizeDcsSpeechTranscript(result.text)
+    if (!normalizedText) {
+      sendSpeechState({ state: 'error', message: '没有识别到有效语音，请重新长按说话' })
+      return
+    }
+    overlayWin?.webContents.send('overlay:speech-result', normalizedText)
+    win?.webContents.send('overlay:speech-result', normalizedText)
+  } catch (reason) {
+    sendSpeechState({ state: 'error', message: reason instanceof Error ? reason.message : String(reason) })
+  } finally {
+    speechFinishing = false
+  }
+}
 
 function startKeyboardHook(hotkey: string): void {
   stopKeyboardHook()
@@ -559,8 +639,9 @@ function startKeyboardHook(hotkey: string): void {
     registerGlobalShortcut(hotkey)
     return
   }
-  const parsed = parseElectronAccelerator(hotkey)
-  if (!parsed) {
+  const joystick = /^JOY:(\d+):BUTTON:(\d+)$/i.exec(hotkey)
+  const parsed = joystick ? null : parseElectronAccelerator(hotkey)
+  if (!parsed && !joystick) {
     registerGlobalShortcut(DEFAULT_OVERLAY_SETTINGS.hotkey)
     return
   }
@@ -569,9 +650,9 @@ function startKeyboardHook(hotkey: string): void {
 
   const psScript = `
 Add-Type -TypeDefinition @'
-${KBD_HOOK_CSHARP}
+${keyboardHookSource}
 '@
-[DcsHubKbdHook]::Start(@('${parsed.vkCode}','${parsed.mods}','${process.pid}'))
+[DcsHubKbdHook]::Start(@(${joystick ? `'JOY','${joystick[1]}','${joystick[2]}','${process.pid}'` : `'${parsed!.vkCode}','${parsed!.mods}','${process.pid}'`}))
 `
   try {
     hotkeyHookProcess = spawn('powershell.exe', [
@@ -591,8 +672,10 @@ ${KBD_HOOK_CSHARP}
       stdoutBuf = lines.pop() ?? ''
       for (const line of lines) {
         const trimmed = line.trim()
-        if (trimmed === 'TOGGLE') {
-          toggleOverlay()
+        if (trimmed === 'DOWN') {
+          overlayHotkeyDown()
+        } else if (trimmed === 'UP') {
+          overlayHotkeyUp()
         } else if (trimmed === 'HOOK_FAILED') {
           registerGlobalShortcut(hotkey)
         }
@@ -601,7 +684,7 @@ ${KBD_HOOK_CSHARP}
     proc.on('exit', () => {
       if (hotkeyHookProcess === proc) {
         hotkeyHookProcess = null
-        registerGlobalShortcut(hotkey)
+        if (!joystick) registerGlobalShortcut(hotkey)
       }
     })
     proc.on('error', () => {
@@ -615,6 +698,12 @@ ${KBD_HOOK_CSHARP}
 }
 
 function stopKeyboardHook(): void {
+  if (hotkeyPressTimer) clearTimeout(hotkeyPressTimer)
+  hotkeyPressTimer = null
+  hotkeyLongPress = false
+  hotkeyPressedAt = 0
+  if (speechRecording) void core?.cancelSpeech()
+  speechRecording = false
   globalShortcut.unregisterAll()
   if (hotkeyHookProcess) {
     const proc = hotkeyHookProcess
@@ -699,9 +788,12 @@ function ensureOverlayWindow(): void {
     configureOverlayWindowForMode(overlayDisplayMode)
   })
 
+  overlayWin.on('resize', scheduleOverlaySizeSave)
   overlayWin.on('closed', () => {
+    if (overlaySizeSaveTimer) clearTimeout(overlaySizeSaveTimer)
+    overlaySizeSaveTimer = null
     stopVrFrameCapture()
-    vrOverlay?.publishInactive()
+    core?.vrOverlay.publishInactive()
     overlayWin = null
     overlayUserVisible = false
   })
@@ -715,76 +807,17 @@ function restoreMainWindow(): void {
   win.focus()
 }
 
-function assertModuleId(value: unknown): string {
-  if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(value)) {
-    throw new Error('Invalid module id')
-  }
-  return value
-}
-
-function assertModuleIds(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length > 64) throw new Error('Invalid module id list')
-  return value.map(assertModuleId)
-}
-
-function assertSettings(value: unknown): ModuleSettings {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid settings patch')
-  const serialized = JSON.stringify(value)
-  if (serialized.length > 128 * 1024) throw new Error('Settings patch is too large')
-  return value as ModuleSettings
-}
-
-function assertActionId(value: unknown): string {
-  if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(value)) throw new Error('Invalid action id')
-  return value
-}
-
-function assertText(value: unknown, label: string, maxLength = 4_096): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) throw new Error(`Invalid ${label}`)
-  return value
-}
-
-function assertFilePaths(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 200) throw new Error('Invalid manual file list')
-  return value.map((filePath) => {
-    const checked = assertText(filePath, 'manual file path', 32_768)
-    if (!path.isAbsolute(checked)) throw new Error('Manual file path must be absolute')
-    return checked
-  })
-}
-
-function assertModManagerSettings(value: unknown): ModManagerSettings {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid mod manager settings')
-  const settings = value as Record<string, unknown>
-  if (!Array.isArray(settings.gameDirectories) || settings.gameDirectories.length === 0 || settings.gameDirectories.length > 16) {
-    throw new Error('Invalid game directories')
-  }
-  const gameDirectories = settings.gameDirectories.map((directory) => {
-    if (!directory || typeof directory !== 'object' || Array.isArray(directory)) throw new Error('Invalid game directory')
-    const item = directory as Record<string, unknown>
-    return {
-      id: assertText(item.id, 'game directory id', 64),
-      name: assertText(item.name, 'game directory name', 80),
-      path: assertText(item.path, 'game directory path'),
-      modsPath: assertText(item.modsPath, 'local mods path'),
-    }
-  })
-  return {
-    gameDirectories,
-    activeGameDirectoryId: assertText(settings.activeGameDirectoryId, 'active game directory id', 64),
-    backupPath: assertText(settings.backupPath, 'backup path'),
-  }
-}
-
 function createWindow(): void {
   const preloadPath = path.join(__dirname, 'preload.cjs')
+  const restoredBounds = visibleMainWindowBounds()
   win = new BrowserWindow({
     title: 'DCSHUB',
     icon: path.join(process.env.VITE_PUBLIC || process.env.DIST || '', 'images', 'dcshub-app-icon.png'),
     frame: false,
     autoHideMenuBar: true,
-    width: 1512,
-    height: 720,
+    width: restoredBounds?.width ?? 1512,
+    height: restoredBounds?.height ?? 720,
+    ...(restoredBounds ? { x: restoredBounds.x, y: restoredBounds.y } : {}),
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#0F172A',
@@ -798,35 +831,64 @@ function createWindow(): void {
 
   win.webContents.on('preload-error', (_event, preloadPath, error) => {
     console.error('[DCS Hub] preload error:', preloadPath, error)
+    diagnosticLogger.error('renderer', 'preload-error', error, { preloadPath })
+  })
+  win.webContents.on('console-message', ({ level, message, lineNumber, sourceId }) => {
+    if (level === 'info' || level === 'debug') return
+    const detail = { level, line: lineNumber, sourceId }
+    if (level === 'error') diagnosticLogger.error('renderer-console', message, undefined, detail)
+    else diagnosticLogger.warn('renderer-console', message, undefined, detail)
   })
 
   if (process.env.VITE_DEV_SERVER_URL) win.loadURL(process.env.VITE_DEV_SERVER_URL)
   else win.loadFile(path.join(process.env.DIST || '', 'index.html'))
 
-  win.on('focus', () => moduleManager.setMonitoringActive(true))
-  win.on('blur', () => moduleManager.setMonitoringActive(false))
-  win.on('minimize', () => moduleManager.setMonitoringActive(false))
-  win.on('hide', () => moduleManager.setMonitoringActive(false))
+  win.on('focus', () => core?.setMonitoringActive(true))
+  win.on('blur', () => core?.setMonitoringActive(false))
+  win.on('minimize', () => core?.setMonitoringActive(false))
+  win.on('hide', () => core?.setMonitoringActive(false))
+  win.on('move', scheduleWindowBoundsSave)
+  win.on('resize', scheduleWindowBoundsSave)
+  win.on('close', rememberCurrentWindowBounds)
   win.on('closed', () => {
-    moduleManager.setMonitoringActive(false)
+    if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer)
+    windowBoundsSaveTimer = null
+    core?.setMonitoringActive(false)
     win = null
+    // The hidden overlay is also a BrowserWindow, so window-all-closed will
+    // not fire after the main window is closed with Alt+F4 / WM_CLOSE.
+    // Explicitly enter the normal application shutdown path in that case.
+    if (!quitCleanupStarted) app.quit()
   })
 }
 
 function registerWindowIpc(): void {
   ipcMain.handle('window:open-update-page', () => shell.openExternal(UPDATE_DOWNLOAD_URL))
+  ipcMain.handle('window:open-logs-directory', async () => {
+    fs.mkdirSync(diagnosticLogger.directory, { recursive: true })
+    const error = await shell.openPath(diagnosticLogger.directory)
+    if (error) throw new Error(error)
+  })
+  ipcMain.handle('window:get-hub-settings', (): HubWindowSettings => ({
+    rememberWindowBounds: hubSettings.rememberWindowBounds,
+  }))
+  ipcMain.handle('window:set-remember-bounds', (_event, enabled: unknown): HubWindowSettings => {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid remember window bounds setting')
+    hubSettings.rememberWindowBounds = enabled
+    if (enabled && win && !win.isDestroyed()) hubSettings.windowBounds = win.getNormalBounds()
+    if (!enabled) hubSettings.windowBounds = null
+    saveHubSettings()
+    return { rememberWindowBounds: enabled }
+  })
   ipcMain.handle('updates:settings', () => {
-    if (!updateService) throw new Error('更新服务尚未初始化')
-    return updateService.settings()
+    return requireCore().updates.settings()
   })
   ipcMain.handle('updates:set-automatic-checks', (_event, enabled: unknown) => {
-    if (!updateService) throw new Error('更新服务尚未初始化')
     if (typeof enabled !== 'boolean') throw new Error('Invalid automatic update setting')
-    return updateService.setAutomaticChecks(enabled)
+    return requireCore().updates.setAutomaticChecks(enabled)
   })
   ipcMain.handle('updates:check', (_event, force: unknown) => {
-    if (!updateService) throw new Error('更新服务尚未初始化')
-    return updateService.check(force === true)
+    return requireCore().updates.check(force === true)
   })
   ipcMain.handle('updates:open-download', async (_event, rawUrl: unknown) => {
     const url = new URL(assertText(rawUrl, 'update download URL', 2_048))
@@ -837,13 +899,15 @@ function registerWindowIpc(): void {
   })
   ipcMain.handle('window:reset-all-user-data', async () => {
     // 同步清理：停止 hook 和快捷键（app.exit 会强制终止进程，子进程也会被清理）
-    try { moduleManager?.setMonitoringActive(false) } catch { /* Best-effort cleanup before relaunch. */ }
+    try { core?.setMonitoringActive(false) } catch { /* Best-effort cleanup before relaunch. */ }
     try { stopKeyboardHook() } catch { /* Best-effort cleanup before relaunch. */ }
     try { globalShortcut.unregisterAll() } catch { /* Best-effort cleanup before relaunch. */ }
-    try { stopDcsProcessMonitor() } catch { /* Best-effort cleanup before relaunch. */ }
     // 清除 session 缓存
     try { await session.defaultSession.clearCache() } catch { /* Relaunch must continue if cache cleanup fails. */ }
     try { await session.defaultSession.clearStorageData() } catch { /* Relaunch must continue if storage cleanup fails. */ }
+    try { await core?.dispose() } catch { /* Best-effort Core and OpenXR cleanup before forced relaunch. */ }
+    diagnosticLogger.info('application', 'reset-user-data')
+    await diagnosticLogger.flush()
     // relaunch + exit(0) 直接强制退出，不触发 before-quit / window-all-closed
     const relaunchArgs = process.argv.slice(1).filter((argument) => argument !== RESET_USER_DATA_ARG)
     app.relaunch({ args: [...relaunchArgs, RESET_USER_DATA_ARG] })
@@ -857,10 +921,12 @@ function registerWindowIpc(): void {
     if (typeof hotkey !== 'string' || !hotkey.trim()) throw new Error('Invalid hotkey')
     const newHotkey = hotkey.trim()
     const parsed = parseElectronAccelerator(newHotkey)
-    if (!parsed) throw new Error('不支持的热键组合')
+    const joystick = /^JOY:\d+:BUTTON:\d+$/i.test(newHotkey)
+    if (!parsed && !joystick) throw new Error('不支持的热键或外设按钮')
     overlaySettings.hotkey = newHotkey
     saveOverlaySettings()
-    startKeyboardHook(newHotkey)
+    if (overlaySettings.enabled) startKeyboardHook(newHotkey)
+    else stopKeyboardHook()
     return overlaySettings
   })
   ipcMain.handle('overlay:set-opacity', (_event, opacity: unknown) => {
@@ -873,19 +939,28 @@ function registerWindowIpc(): void {
   ipcMain.handle('overlay:set-size', (_event, width: unknown, height: unknown) => {
     if (typeof width !== 'number' || width < 400 || width > 2000) throw new Error('Invalid width')
     if (typeof height !== 'number' || height < 300 || height > 1600) throw new Error('Invalid height')
-    overlaySettings.width = Math.round(width)
-    overlaySettings.height = Math.round(height)
-    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.setSize(overlaySettings.width, overlaySettings.height)
+    const nextWidth = Math.round(width)
+    const nextHeight = Math.round(height)
+    if (overlayDisplayMode === 'vr') {
+      overlaySettings.vrWidth = nextWidth
+      overlaySettings.vrHeight = nextHeight
+    } else {
+      overlaySettings.width = nextWidth
+      overlaySettings.height = nextHeight
+    }
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.setSize(nextWidth, nextHeight)
     saveOverlaySettings()
     return overlaySettings
   })
   ipcMain.handle('overlay:set-enabled', (_event, enabled: unknown) => {
     overlaySettings.enabled = !!enabled
     if (!overlaySettings.enabled && overlayUserVisible) setOverlayVisibility(false)
+    if (overlaySettings.enabled) startKeyboardHook(overlaySettings.hotkey)
+    else stopKeyboardHook()
     saveOverlaySettings()
     return overlaySettings
   })
-  ipcMain.handle('overlay:get-display-mode', () => vrOverlay?.status() || {
+  ipcMain.handle('overlay:get-display-mode', () => core?.vrOverlay.status() || {
     mode: overlayDisplayMode,
     available: false,
     bridgeRunning: false,
@@ -898,50 +973,15 @@ function registerWindowIpc(): void {
   ipcMain.handle('overlay:move-vr', (_event, normalizedDeltaX: unknown, normalizedDeltaY: unknown) => {
     if (typeof normalizedDeltaX !== 'number' || !Number.isFinite(normalizedDeltaX) || Math.abs(normalizedDeltaX) > 0.25) throw new Error('Invalid VR X movement')
     if (typeof normalizedDeltaY !== 'number' || !Number.isFinite(normalizedDeltaY) || Math.abs(normalizedDeltaY) > 0.25) throw new Error('Invalid VR Y movement')
-    vrOverlay?.moveBy(normalizedDeltaX, normalizedDeltaY)
+    core?.vrOverlay.moveBy(normalizedDeltaX, normalizedDeltaY)
   })
   ipcMain.handle('overlay:begin-text-input', () => beginVrOverlayTextInput())
   ipcMain.handle('overlay:end-text-input', () => endVrOverlayTextInput())
 }
 
-function registerModuleIpc(): void {
-  ipcMain.handle('modules:list', () => moduleManager.list())
-  ipcMain.handle('modules:snapshots', () => moduleManager.snapshots())
-  ipcMain.handle('modules:start', (_event, moduleId: unknown) => moduleManager.start(assertModuleId(moduleId)))
-  ipcMain.handle('modules:stop', (_event, moduleId: unknown) => moduleManager.stop(assertModuleId(moduleId)))
-  ipcMain.handle('modules:start-profile', (_event, moduleIds: unknown, rollbackOnFailure: unknown) => (
-    moduleManager.startProfile(assertModuleIds(moduleIds), rollbackOnFailure !== false)
-  ))
-  ipcMain.handle('modules:stop-profile', (_event, moduleIds: unknown) => moduleManager.stopProfile(assertModuleIds(moduleIds)))
-  ipcMain.handle('modules:read-settings', (_event, moduleId: unknown) => moduleManager.readSettings(assertModuleId(moduleId)))
-  ipcMain.handle('modules:apply-settings', (_event, moduleId: unknown, patch: unknown) => (
-    moduleManager.applySettings(assertModuleId(moduleId), assertSettings(patch))
-  ))
-  ipcMain.handle('modules:show-window', (_event, moduleId: unknown) => moduleManager.showWindow(assertModuleId(moduleId)))
-  ipcMain.handle('modules:read-actions', (_event, moduleId: unknown) => moduleManager.readActions(assertModuleId(moduleId)))
-  ipcMain.handle('modules:invoke-action', (_event, moduleId: unknown, actionId: unknown, active: unknown) => {
-    if (typeof active !== 'boolean') throw new Error('Invalid action state')
-    return moduleManager.invokeAction(assertModuleId(moduleId), assertActionId(actionId), active)
-  })
-  ipcMain.handle('modules:recent-logs', (_event, moduleId: unknown, limit: unknown) => (
-    moduleManager.recentLogs(assertModuleId(moduleId), typeof limit === 'number' ? limit : 200)
-  ))
-
-  moduleManager.on('changed', (event: ModuleChangedEvent) => {
-    if (win && !win.isDestroyed()) win.webContents.send('modules:changed', event)
-  })
-  moduleManager.on('log', (entry: ModuleLogEntry) => {
-    if (win && !win.isDestroyed()) win.webContents.send('modules:log', entry)
-  })
-  moduleManager.on('catalog-changed', () => {
-    if (win && !win.isDestroyed()) win.webContents.send('modules:catalog-changed')
-  })
-}
-
 function registerSoftwareCatalogIpc(): void {
   const service = () => {
-    if (!softwareCatalog) throw new Error('软件目录服务尚未初始化')
-    return softwareCatalog
+    return requireCore().softwareCatalog
   }
   ipcMain.handle('software-catalog:overview', () => service().overview())
   ipcMain.handle('software-catalog:choose-and-add', async () => {
@@ -988,8 +1028,7 @@ function registerSoftwareCatalogIpc(): void {
 
 function registerModManagerIpc(): void {
   const service = () => {
-    if (!modManager) throw new Error('模组管理器尚未初始化')
-    return modManager
+    return requireCore().modManager
   }
   ipcMain.handle('mod-manager:overview', () => service().overview())
   ipcMain.handle('mod-manager:choose-directory', async (_event, title: unknown) => {
@@ -1043,178 +1082,108 @@ function registerModManagerIpc(): void {
   ))
 }
 
-function registerDcsIpc(): void {
-  const service = () => {
-    if (!dcsLaunch) throw new Error('DCS 启动服务尚未初始化')
-    return dcsLaunch
-  }
-  ipcMain.handle('dcs:status', () => service().status())
-  ipcMain.handle('dcs:choose-install-directory', async () => {
-    const options: Electron.OpenDialogOptions = {
-      title: '选择 DCS World 安装目录',
-      properties: ['openDirectory'],
-    }
-    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
-    return result.canceled ? null : service().setInstallPath(result.filePaths[0])
-  })
-  ipcMain.handle('dcs:use-automatic-detection', () => service().useAutomaticDetection())
-  ipcMain.handle('dcs:launch', (_event, mode: unknown) => {
-    if (mode !== 'vr' && mode !== 'desktop') throw new Error('Invalid DCS launch mode')
-    applyOverlayDisplayMode(mode)
-    return service().launch(mode)
-  })
-  ipcMain.handle('dcs:launch-launcher', () => service().launchLauncher())
-}
-
-function registerManualLibraryIpc(): void {
-  const service = () => {
-    if (!manualLibrary) throw new Error('超级手册服务尚未初始化')
-    return manualLibrary
-  }
-  ipcMain.handle('manual-library:overview', () => service().overview())
-  ipcMain.handle('manual-library:current-progress', () => service().currentOperationProgress())
-  ipcMain.handle('manual-library:choose-directory', async () => {
-    const options: Electron.OpenDialogOptions = {
-      title: '选择超级手册库目录',
-      properties: ['openDirectory', 'createDirectory'],
-    }
-    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
-    return result.canceled || !result.filePaths[0] ? null : service().setLibraryPath(result.filePaths[0], true)
-  })
-  ipcMain.handle('manual-library:choose-files', async () => {
-    const options: Electron.OpenDialogOptions = {
-      title: '添加手册',
-      properties: ['openFile', 'multiSelections'],
-      filters: [{ name: '手册文件', extensions: ['pdf', 'docx', 'epub', 'html', 'htm', 'md', 'markdown', 'txt', 'rtf'] }],
-    }
-    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
-    return result.canceled || result.filePaths.length === 0 ? null : service().importManualFiles(result.filePaths)
-  })
-  ipcMain.handle('manual-library:import-files', (_event, filePaths: unknown) => service().importManualFiles(assertFilePaths(filePaths)))
-  ipcMain.handle('manual-library:rebuild-index', (_event, force: unknown) => service().rebuildIndex(force === true))
-  ipcMain.handle('manual-library:import-dcs-manuals', () => service().importDcsManuals())
-  ipcMain.handle('manual-library:search', (_event, query: unknown, limit: unknown) => (
-    service().search(assertText(query, 'manual search query', 500), typeof limit === 'number' ? limit : 8)
-  ))
-  ipcMain.handle('manual-library:ask', (_event, question: unknown) => service().ask(assertText(question, 'manual question', 2_000)))
-  ipcMain.handle('manual-library:ask-online', (_event, question: unknown) => service().askOnline(assertText(question, 'manual online question', 2_000)))
-  ipcMain.handle('manual-library:configure-deepseek', (_event, apiKey: unknown) => (
-    service().configureDeepSeek(assertText(apiKey, 'DeepSeek API key', 512))
-  ))
-  ipcMain.handle('manual-library:clear-deepseek', () => service().clearDeepSeek())
-  ipcMain.handle('manual-library:test-deepseek', (_event, apiKey: unknown) => (
-    service().testDeepSeek(apiKey === undefined ? undefined : assertText(apiKey, 'DeepSeek API key', 512))
-  ))
-  ipcMain.handle('manual-library:chuck-catalog', () => service().chuckCatalog())
-  ipcMain.handle('manual-library:download-chuck', (_event, guideId: unknown) => service().downloadChuckGuide(assertText(guideId, 'Chuck guide id', 64)))
-  ipcMain.handle('manual-library:download-selected-chuck', (_event, guideIds: unknown) => {
-    if (!Array.isArray(guideIds)) throw new Error('guideIds must be an array')
-    return service().downloadSelectedChuckGuides(guideIds.map((id) => assertText(id, 'Chuck guide id', 64)))
-  })
-  ipcMain.handle('manual-library:download-all-chuck', () => service().downloadAllChuckGuides())
-  ipcMain.handle('manual-library:remove-dcs-duplicates', () => service().removeDuplicateDcsManuals())
-  ipcMain.handle('manual-library:complete-onboarding', () => service().completeOnboarding())
-  ipcMain.handle('manual-library:open-document', async (_event, documentId: unknown, pageNumber: unknown) => {
-    const documentPath = service().documentPath(assertText(documentId, 'manual document id', 64))
-    const page = typeof pageNumber === 'number' && Number.isInteger(pageNumber) && pageNumber > 0 ? pageNumber : undefined
-    if (page && path.extname(documentPath).toLocaleLowerCase() === '.pdf') {
-      const viewer = new BrowserWindow({
-        title: `${path.basename(documentPath)} · 第 ${page} 页`,
-        width: 1280,
-        height: 900,
-        minWidth: 760,
-        minHeight: 560,
-        autoHideMenuBar: true,
-        backgroundColor: '#202124',
-        webPreferences: {
-          nodeIntegration: false,
-          contextIsolation: true,
-          sandbox: true,
-          plugins: true,
-        },
-      })
-      viewer.setMenu(null)
-      manualViewerWindows.add(viewer)
-      viewer.on('closed', () => manualViewerWindows.delete(viewer))
-      try {
-        await viewer.loadURL(`${pathToFileURL(documentPath).href}#page=${page}&zoom=page-width`)
-        viewer.show()
-        return
-      } catch {
-        viewer.destroy()
-      }
-    }
-    const error = await shell.openPath(documentPath)
-    if (error) throw new Error(error)
-  })
-  ipcMain.handle('manual-library:open-online-source', async (_event, rawUrl: unknown) => {
-    const url = new URL(assertText(rawUrl, 'online source URL', 4_096))
-    if (url.protocol !== 'https:') throw new Error('只允许打开 HTTPS 在线来源')
-    await shell.openExternal(url.toString())
-  })
-  ipcMain.handle('manual-library:page-preview', (_event, documentId: unknown, pageNumber: unknown) => (
-    service().pagePreview(assertText(documentId, 'manual document id', 64), typeof pageNumber === 'number' ? pageNumber : 0)
-  ))
-  ipcMain.handle('manual-library:ask-screenshot', (_event, question: unknown, imageDataUrl: unknown) => (
-    service().askWithScreenshot(assertText(question, 'manual screenshot question', 2_000), assertText(imageDataUrl, 'screenshot data', 16 * 1024 * 1024))
-  ))
-}
-
 app.whenReady().then(async () => {
+  diagnosticLogger.info('application', 'started', { version: APP_VERSION, packaged: app.isPackaged, platform: process.platform, arch: process.arch })
   Menu.setApplicationMenu(null)
   loadOverlaySettings()
-  registerOverlayHotkey()
-  startDcsProcessMonitor()
+  loadHubSettings()
+  if (overlaySettings.enabled) registerOverlayHotkey()
   const vrResources = app.isPackaged
     ? path.join(process.resourcesPath, 'vr-overlay')
     : path.join(app.getAppPath(), 'build', 'native', 'vr-overlay')
-  vrOverlay = new VrOverlayService(vrResources)
-  modManager = new ModManagerService(app.getPath('userData'))
-  dcsLaunch = new DcsLaunchService(app.getPath('userData'))
-  manualLibrary = new ManualLibraryService(
-    app.getPath('userData'),
-    {
+  const nativeCoreExecutable = app.isPackaged
+    ? path.join(process.resourcesPath, 'core', 'DcsHub.Core.Host.exe')
+    : path.join(app.getAppPath(), 'build', 'native', 'core', 'DcsHub.Core.Host.exe')
+  core = new AppCore({
+    userDataDirectory: app.getPath('userData'),
+    packaged: app.isPackaged,
+    vrResourcesDirectory: vrResources,
+    nativeCoreExecutable,
+    diagnosticLogDirectory,
+    appVersion: APP_VERSION,
+    encryption: {
       available: () => safeStorage.isEncryptionAvailable(),
       protect: (value) => safeStorage.encryptString(value).toString('base64'),
       unprotect: (value) => safeStorage.decryptString(Buffer.from(value, 'base64')),
     },
-    () => dcsLaunch?.status().installPath || null,
-    fetch,
-    (progress) => win?.webContents.send('manual-library:progress', progress),
-  )
-  updateService = new UpdateService(app.getPath('userData'), APP_VERSION, fetch)
-  softwareCatalog = new SoftwareCatalogService(app.getPath('userData'), moduleManager, [
-    { id: 'voxbind', createDriver: createVoxBindDriver },
-    { id: 'srs', createDriver: createSrsDriver },
-    { id: 'dcs-eye-mouse', createDriver: createEyeMouseDriver },
-    { id: 'moza-cockpit', createDriver: createMozaCockpitDriver },
-    { id: 'pimax-vr', createDriver: createPimaxVrDriver },
-    { id: 'aimxyz', createDriver: createAimxyZDriver },
-  ], app.isPackaged)
-  registerModuleIpc()
+    fetchImpl: fetch,
+    onDcsMonitorError: (error) => mainLogger.warn('dcs-process-monitor', 'DCS 进程检测失败', error),
+    onModuleChanged: (event) => diagnosticLogger.info('module', 'state-changed', {
+      moduleId: event.snapshot.moduleId,
+      runState: event.snapshot.runState,
+      installState: event.snapshot.installState,
+      ownership: event.snapshot.ownership,
+      lastError: event.snapshot.lastError,
+    }),
+    onModuleLog: (entry) => {
+      if (entry.level === 'error') diagnosticLogger.error('module', entry.message, undefined, { moduleId: entry.moduleId })
+      else if (entry.level === 'warn') diagnosticLogger.warn('module', entry.message, undefined, { moduleId: entry.moduleId })
+    },
+  })
+  ipcMain.handle('overlay:set-microphone', (_event, microphoneId: unknown) => {
+    if (microphoneId !== null && typeof microphoneId !== 'string') throw new Error('麦克风标识无效')
+    overlaySettings.microphoneId = typeof microphoneId === 'string' && microphoneId ? microphoneId : null
+    saveOverlaySettings()
+    return overlaySettings
+  })
+  ipcMain.handle('overlay:list-microphones', () => requireCore().speechDevices())
+  ipcMain.handle('overlay:speech-model-status', () => speechModelStatus())
+  ipcMain.handle('overlay:download-speech-model', () => downloadSenseVoiceModel())
+  core.events.on('dcs-process-changed', (running) => {
+    if (!running && overlayUserVisible) setOverlayVisibility(false)
+  })
+  core.events.on('manual-progress', (progress) => win?.webContents.send('manual-library:progress', progress))
+  registerModuleIpc(core.modules, () => win)
   registerModManagerIpc()
-  registerDcsIpc()
-  registerManualLibraryIpc()
+  registerDcsIpc({ getService: () => core?.dcsLaunch || null, getWindow: () => win, setOverlayDisplayMode: (mode) => { applyOverlayDisplayMode(mode) } })
+  registerManualLibraryIpc({ getService: () => core?.manualLibrary || null, getWindow: () => win, viewerWindows: manualViewerWindows })
   registerSoftwareCatalogIpc()
   registerWindowIpc()
-  moduleManager.setMonitoringActive(false)
-  await moduleManager.initialize()
+  await core.initialize()
   createWindow()
-  win?.webContents.once('did-finish-load', () => { void manualLibrary?.ensureCurrentSearchIndexes() })
+  win?.webContents.once('did-finish-load', () => { void core?.manualLibrary.ensureCurrentSearchIndexes() })
 })
 
 app.on('before-quit', (event) => {
   if (quitCleanupStarted) return
+  diagnosticLogger.info('application', 'before-quit')
   event.preventDefault()
   quitCleanupStarted = true
-  stopDcsProcessMonitor()
   stopVrFrameCapture()
-  try { vrOverlay?.dispose() } catch { /* Best-effort OpenXR cleanup before quit. */ }
   stopKeyboardHook()
   globalShortcut.unregisterAll()
   try { overlayWin?.destroy() } catch { /* The overlay may already be destroyed. */ }
   overlayWin = null
-  void moduleManager.dispose().finally(() => app.quit())
+  void (async () => {
+    let cleanupTimer: ReturnType<typeof setTimeout> | null = null
+    try {
+      await Promise.race([
+        core?.dispose(),
+        new Promise<never>((_resolve, reject) => {
+          cleanupTimer = setTimeout(
+            () => reject(new Error(`DCSHUB shutdown cleanup exceeded ${SHUTDOWN_CLEANUP_TIMEOUT_MS}ms`)),
+            SHUTDOWN_CLEANUP_TIMEOUT_MS,
+          )
+        }),
+      ])
+    } catch (error) {
+      diagnosticLogger.error('application', 'module-cleanup-failed', error)
+    } finally {
+      if (cleanupTimer) clearTimeout(cleanupTimer)
+      try {
+        await Promise.race([
+          diagnosticLogger.flush(),
+          new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
+        ])
+      } finally {
+        // The second app.quit() used to rely on Electron re-entering
+        // before-quit. app.exit is deterministic after cleanup (or timeout)
+        // and closes inherited handles so Core/VR child watchers can exit.
+        app.exit(0)
+      }
+    }
+  })()
 })
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('activate', restoreMainWindow)
+app.on('render-process-gone', (_event, webContents, details) => diagnosticLogger.error('renderer', 'process-gone', undefined, { reason: details.reason, exitCode: details.exitCode, url: webContents.getURL() }))

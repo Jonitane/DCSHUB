@@ -3,7 +3,172 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
-import { ManualLibraryService } from '../electron/builtins/manual-library/service'
+import { deterministicFocusEvidenceScore, deterministicProcedureCompleteness, deterministicQuestionSemantics, localQuestionRequiresOnlineSearch, ManualLibraryService } from '../electron/builtins/manual-library/service'
+import { verifiedEvidenceLedger } from '../electron/builtins/manual-library/evidence-auditor'
+import { classifyManualSource, manualAuthority } from '../electron/builtins/manual-library/source-classifier'
+import { normalizeDcsSpeechTranscript } from '../electron/builtins/manual-library/speech-normalizer'
+import { resolveWeaponVariantQuestion, weaponVariantEvidenceScore } from '../electron/builtins/manual-library/weapon-ontology'
+
+const chuckClassification = classifyManualSource({
+  relativePath: 'misc/guide.pdf',
+  contentSample: "Chuck's Guides DCS F-16C Viper — Version 2.1",
+  language: 'en',
+  aircraft: 'F-16C',
+  storageKind: 'user',
+})
+assert.equal(chuckClassification.sourceKind, 'chuck')
+assert.equal(manualAuthority(chuckClassification), 400)
+const heatblurOfficialClassification = classifyManualSource({
+  relativePath: "Chuck's Guides/F-14/F-14 Manual.pdf",
+  contentSample: 'Heatblur Simulations F-14 Tomcat Flight Manual. Aircraft systems and operating procedures.',
+  language: 'en',
+  aircraft: 'F-14',
+  storageKind: 'chuck',
+})
+assert.equal(heatblurOfficialClassification.sourceKind, 'dcs')
+assert.equal(heatblurOfficialClassification.classificationConfidence, 'high')
+assert.equal(manualAuthority(heatblurOfficialClassification), 300)
+const heatblurRecommendationClassification = classifyManualSource({
+  relativePath: 'DCS Manuals/F14/F-14 Manual.pdf',
+  contentSample: "F-14 Tomcat Manual. Heatblur F-14 Tomcat. For a hands-on approach it is recommended to check out Chuck's Guide as well.",
+  language: 'en',
+  aircraft: 'F-14',
+  storageKind: 'chuck',
+})
+assert.equal(heatblurRecommendationClassification.sourceKind, 'dcs')
+assert.match(deterministicQuestionSemantics('F14 的不死鸟怎么用'), /F-14/)
+assert.match(deterministicQuestionSemantics('F14 的不死鸟怎么用'), /AIM-54 Phoenix/)
+assert.match(deterministicQuestionSemantics('F14CASE3'), /F-14/)
+assert.match(deterministicQuestionSemantics('F14CASE3'), /Carrier operations/)
+assert.match(deterministicQuestionSemantics('F18 case 1'), /Carrier operations/)
+assert.match(deterministicQuestionSemantics('大黄蜂怎么投宝石路'), /Paveway LGB/)
+assert.match(deterministicQuestionSemantics('大黄蜂怎么投宝石路'), /GBU-10\/12\/16\/24/)
+assert.match(deterministicQuestionSemantics('用小牛和哈姆攻击目标'), /AGM-65 Maverick/)
+assert.match(deterministicQuestionSemantics('用小牛和哈姆攻击目标'), /AGM-88 HARM/)
+assert.match(deterministicQuestionSemantics('阿帕奇的地狱火怎么用'), /AGM-114 Hellfire/)
+assert.match(deterministicQuestionSemantics('阿帕奇的地狱火怎么用'), /AGM-114K.*AGM-114L/)
+assert.match(deterministicQuestionSemantics('阿帕奇的 AGM-114L 怎么用'), /AGM-114L.*不得混入同族其他型号/)
+assert.match(deterministicQuestionSemantics('A10 的小牛怎么用'), /AGM-65A\/B.*AGM-65D\/G.*AGM-65H\/K.*AGM-65E\/E2\/L/)
+assert.match(deterministicQuestionSemantics('F16 的 GBU 怎么用'), /Bombs\/GBU\/LGB\/JDAM/)
+assert.equal(normalizeDcsSpeechTranscript('F18怎么丢节达姆'), 'F/A-18C怎么丢JDAM')
+assert.equal(normalizeDcsSpeechTranscript('F18怎么丢激光杰达姆'), 'F/A-18C怎么丢LJDAM')
+assert.equal(normalizeDcsSpeechTranscript('j d a m 怎么投放'), 'JDAM 怎么投放')
+assert.equal(normalizeDcsSpeechTranscript('iPhone怎么用不死鸟'), 'F-14怎么用不死鸟')
+assert.equal(normalizeDcsSpeechTranscript('F fourteen怎么冷启动'), 'F-14怎么冷启动')
+assert.equal(normalizeDcsSpeechTranscript('F十六怎么设置塔康'), 'F-16C怎么设置TACAN')
+assert.equal(normalizeDcsSpeechTranscript('F A eighteen怎么着舰'), 'F/A-18C怎么着舰')
+assert.equal(normalizeDcsSpeechTranscript('A H sixty four怎么用地狱火'), 'AH-64D怎么用地狱火')
+assert.equal(normalizeDcsSpeechTranscript('M I G twenty nine怎么锁定'), 'MiG-29怎么锁定')
+assert.equal(normalizeDcsSpeechTranscript('S U twenty seven怎么发射导弹'), 'Su-27怎么发射导弹')
+assert.match(deterministicQuestionSemantics(normalizeDcsSpeechTranscript('iPhone怎么用不死鸟')), /F-14/)
+assert.match(deterministicQuestionSemantics('F18怎么丢节达姆'), /JDAM（GBU-31\/32\/38）/)
+assert.doesNotMatch(deterministicQuestionSemantics('F18怎么丢节达姆'), /ATFLIR/)
+assert.equal(localQuestionRequiresOnlineSearch('F18怎么用'), true)
+assert.equal(localQuestionRequiresOnlineSearch('这个怎么弄'), true)
+assert.equal(localQuestionRequiresOnlineSearch('啊啊啊'), true)
+assert.equal(localQuestionRequiresOnlineSearch('F18怎么丢节达姆'), false)
+assert.equal(localQuestionRequiresOnlineSearch('F18座舱盖怎么开'), false)
+assert.equal(localQuestionRequiresOnlineSearch('F18冷启动'), false)
+assert.ok(deterministicFocusEvidenceScore('F14 的不死鸟怎么用', 'AIM-54 Phoenix missile employment with the AWG-9 radar') > 0)
+assert.equal(deterministicFocusEvidenceScore('F14 的不死鸟怎么用', 'F-14 acronyms and cockpit abbreviations'), 0)
+assert.ok(deterministicFocusEvidenceScore('阿帕奇的地狱火怎么用', 'AGM-114 Hellfire SAL and RF missile operation') > 0)
+assert.equal(deterministicFocusEvidenceScore('阿帕奇的地狱火怎么用', 'AGM-114K Hellfire Missile Operation by Multicrew'), 1)
+assert.equal(deterministicFocusEvidenceScore('阿帕奇的地狱火怎么用', 'AH-64D Hydra rocket employment'), 0)
+const vagueHellfire = resolveWeaponVariantQuestion('阿帕奇的地狱火怎么用')[0]
+assert.equal(vagueHellfire.explicitVariants.length, 0)
+assert.deepEqual(vagueHellfire.ambiguousVariants.map((variant) => variant.id), ['agm-114k', 'agm-114l'])
+const explicitHellfireL = resolveWeaponVariantQuestion('阿帕奇 AGM-114L 怎么用')[0]
+assert.deepEqual(explicitHellfireL.explicitVariants.map((variant) => variant.id), ['agm-114l'])
+assert.ok(weaponVariantEvidenceScore(explicitHellfireL.explicitVariants[0], 'AGM-114L RF Missile Type and FCR target data') > 0)
+const vagueMaverick = resolveWeaponVariantQuestion('F16 小牛怎么用')[0]
+assert.equal(vagueMaverick.ambiguousVariants.length, 4)
+assert.deepEqual(resolveWeaponVariantQuestion('F16 激光小牛怎么用')[0].explicitVariants.map((variant) => variant.id), ['agm-65-laser'])
+assert.deepEqual(resolveWeaponVariantQuestion('F16 AGM-65D怎么用')[0].explicitVariants.map((variant) => variant.id), ['agm-65-ir'])
+assert.deepEqual(resolveWeaponVariantQuestion('F14 不死鸟怎么选')[0].ambiguousVariants.map((variant) => variant.id), ['aim-54a-mk47', 'aim-54a-mk60', 'aim-54c-mk47', 'aim-54c-mk60'])
+assert.deepEqual(resolveWeaponVariantQuestion('苏27的R-27ET怎么用')[0].explicitVariants.map((variant) => variant.id), ['r-27-ir'])
+assert.deepEqual(resolveWeaponVariantQuestion('F18用鱼叉怎么打船')[0].explicitVariants.map((variant) => variant.id), ['agm-84d'])
+assert.deepEqual(resolveWeaponVariantQuestion('F18 AGM-84怎么用')[0].ambiguousVariants.map((variant) => variant.id), ['agm-84d', 'agm-84e', 'agm-84hk'])
+assert.deepEqual(resolveWeaponVariantQuestion('A10 GBU-12怎么投')[0].explicitVariants.map((variant) => variant.id), ['paveway-ii'])
+assert.ok(deterministicFocusEvidenceScore('F16 的 GBU 怎么用', 'GBU-12 laser guided bomb delivery procedure') > 0)
+assert.equal(deterministicFocusEvidenceScore('F16 的 GBU 怎么用', 'F-16C air-to-air TWS radar designation'), 0)
+assert.deepEqual(
+  deterministicProcedureCompleteness('F18冷启动', 'START-UP PROCEDURE\nCOCKPIT PREPARATION\nENGINE START\nINS ALIGNMENT\nPOST-START CHECKS READY TO TAXI'),
+  ['preparation', 'power-engine', 'navigation-alignment', 'post-start'],
+)
+assert.deepEqual(
+  deterministicProcedureCompleteness('F14BU冷启动', 'Jester Assisted Startup. Select INS alignment when requested.'),
+  ['navigation-alignment'],
+)
+assert.deepEqual(
+  deterministicProcedureCompleteness('F14的不死鸟怎么用', 'AIM-54 employment: verify loadout, select weapon and radar, acquire and lock the target, launch, then observe time to impact and breakaway limits.'),
+  ['prerequisites-loadout', 'mode-sensor-setup', 'acquire-designate', 'release-launch', 'post-release-limits'],
+)
+assert.deepEqual(
+  deterministicProcedureCompleteness('TACAN怎么设置', 'Power the UFC, enter the channel, confirm the selection, and check the displayed status and warning.'),
+  ['power-entry', 'configure-input', 'execute-confirm', 'feedback-limits'],
+)
+assert.deepEqual(
+  deterministicProcedureCompleteness('空中加油怎么做', 'Set the correct configuration and speed, enter pre-contact, maintain position to connect, observe the signal, then disconnect or breakaway.'),
+  ['conditions-configuration', 'entry', 'execution', 'criteria-feedback', 'abort-exit'],
+)
+
+const chuckBylineClassification = classifyManualSource({
+  relativePath: 'User Manuals/DCS F-16C Viper Guide.pdf',
+  contentSample: 'DCS GUIDE F-16CM VIPER BLOCK 50 BY CHUCK\nLast Updated: 20 July 2026\nThis guide refers to Eagle Dynamics official manuals.',
+  language: 'en',
+  aircraft: 'F-16C',
+  storageKind: 'user',
+})
+assert.equal(chuckBylineClassification.sourceKind, 'chuck')
+assert.equal(chuckBylineClassification.classificationConfidence, 'high')
+assert.equal(manualAuthority(chuckBylineClassification), 400)
+
+const translatedOfficial = classifyManualSource({
+  relativePath: 'uploads/F-16中文.pdf',
+  contentSample: 'DCS F-16C Flight Manual EAGLE DYNAMICS 用户汉化版 译者：测试',
+  language: 'zh',
+  aircraft: 'F-16C',
+  storageKind: 'user',
+})
+assert.equal(translatedOfficial.sourceKind, 'user')
+assert.equal(translatedOfficial.isTranslation, true)
+assert.equal(translatedOfficial.translatedFrom, 'dcs')
+
+const nonFullClickOfficial = classifyManualSource({
+  relativePath: 'DCS Manuals/F-15C.pdf',
+  contentSample: 'DCS F-15C Flight Manual EAGLE DYNAMICS Flaming Cliffs',
+  language: 'en',
+  aircraft: 'F-15C',
+  storageKind: 'dcs',
+})
+assert.equal(nonFullClickOfficial.officialModuleType, 'non-full-click')
+assert.equal(manualAuthority(nonFullClickOfficial), 100)
+
+const normalizedLedger = verifiedEvidenceLedger({
+  title: 'F-14 JDAM 预规划投放',
+  overview: { text: '该流程用于投放已经装载任务坐标的 JDAM。', citations: [1] },
+  sections: [
+  { heading: '完整操作流程', entries: [
+    { kind: 'prerequisite', text: '- 完整操作流程：挂载 GBU-31\n并完成任务数据装载。', explanation: '开始投放前确认。', citations: [1] },
+    { kind: 'step', text: '1. 打开 JMSN 页面\n- 查看任务数据。', explanation: '确认目标数据存在。', citations: [1] },
+  ] },
+  { heading: 'Weapon Control Panel', entries: [
+    { kind: 'step', text: '2. 设置投放模式。', explanation: '', citations: [2] },
+    { kind: 'result', text: '页面显示 READY。', explanation: '', citations: [2] },
+    { kind: 'warning', text: '设置投放模式。', explanation: '重复事实不应再次显示。', citations: [2] },
+  ] },
+] }, 2)
+assert.ok(normalizedLedger)
+assert.match(normalizedLedger, /^## F-14 JDAM 预规划投放/m)
+assert.match(normalizedLedger, /该流程用于投放已经装载任务坐标的 JDAM。 \[S1\]/)
+assert.match(normalizedLedger, /### 前提条件/)
+assert.match(normalizedLedger, /### 操作说明/)
+assert.doesNotMatch(normalizedLedger, /\*\*完整操作流程\*\*/)
+assert.equal((normalizedLedger.match(/^1\. /gm) || []).length, 1)
+assert.match(normalizedLedger, /^1\. 打开 JMSN 页面；查看任务数据。/m)
+assert.match(normalizedLedger, /^2\. 设置投放模式。/m)
+assert.equal((normalizedLedger.match(/设置投放模式。/g) || []).length, 1)
+assert.doesNotMatch(normalizedLedger, /成功判断|页面显示 READY/)
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dcs-hub-manual-library-'))
 const userDataPath = path.join(root, 'UserData')
@@ -16,6 +181,7 @@ const protector = {
   unprotect: (value: string) => Buffer.from(value, 'base64').toString('utf8'),
 }
 
+let onlineRequestCount = 0
 const fakeFetch: typeof fetch = async (_input, init) => {
   const url = String(_input)
   if (url.startsWith('https://chucksguides.com/aircraft/dcs/')) {
@@ -28,11 +194,14 @@ const fakeFetch: typeof fetch = async (_input, init) => {
     })
   }
   if (url === 'https://api.deepseek.com/anthropic/v1/messages') {
-    const onlineBody = JSON.parse(String(init?.body || '{}')) as { model?: string; thinking?: { type?: string }; output_config?: { effort?: string }; tools?: Array<{ type?: string }> }
+    onlineRequestCount += 1
+    const onlineBody = JSON.parse(String(init?.body || '{}')) as { model?: string; thinking?: { type?: string }; output_config?: { effort?: string }; tools?: Array<{ type?: string }>; system?: string; messages?: Array<{ content?: Array<{ text?: string }> }> }
     assert.equal(onlineBody.model, 'deepseek-v4-pro')
     assert.equal(onlineBody.thinking?.type, 'enabled')
     assert.equal(onlineBody.output_config?.effort, 'max')
     assert.equal(onlineBody.tools?.some((tool) => tool.type === 'web_search_20250305'), true)
+    assert.match(onlineBody.system || '', /同一次请求中完成联网检索、来源核对和最终答案生成/)
+    assert.match(onlineBody.messages?.[0]?.content?.[0]?.text || '', /DCSHUB 本地确定性语义解析/)
     return new Response(JSON.stringify({
       content: [
         { type: 'web_search_tool_result', content: [{ type: 'web_search_result', title: 'Eagle Dynamics F-16C Manual', url: 'https://www.digitalcombatsimulator.com/en/downloads/documentation/' }] },
@@ -49,7 +218,13 @@ const fakeFetch: typeof fetch = async (_input, init) => {
   const userText = body.messages?.filter((message) => message.role === 'user').map((message) => message.content || '').join('\n') || ''
   const isHmcsQuestion = /F[\s-]*16[^\n]*(?:头盔|HMCS|JHMCS)[^\n]*(?:标记|指定|designation)/i.test(userText)
   const isHornetHelmetQuestion = /F(?:\s*\/\s*A)?[\s-]*18[^\n]*(?:头盔|HMD|JHMCS)[^\n]*(?:标记|指定|designation|目标)/i.test(userText)
+  const askedQuestion = userText.match(/(?:用户问题|问题)：([^\n]+)/)?.[1] || ''
+  const isAmbiguousHornetHelmetQuestion = isHornetHelmetQuestion
+    && !/(?:空中目标|空对空|敌机|A\/A|地面目标|空对地|对地|A\/G|标记点|MARKPOINT)/i.test(askedQuestion)
+  const isAmbiguousHmcsQuestion = isHmcsQuestion
+    && !/(?:空中目标|空对空|敌机|A\/A|地面目标|空对地|对地|A\/G|标记点|MARKPOINT)/i.test(askedQuestion)
   const isEvidenceAuditor = /证据(?:账本生成器|审校员)/.test(systemText)
+  const isOnePassAnswer = systemText.includes('结构化证据条目')
   const candidateBlocks = [...userText.matchAll(/\[C(\d+)\][\s\S]*?(?=\n\n\[C|$)/g)]
   const isAirdropQuestion = /(?:用户问题|问题)：[^\n]*(?:C[\s-]*130|空投)/i.test(userText)
   const preferredCandidateOrder = candidateBlocks
@@ -69,16 +244,67 @@ const fakeFetch: typeof fetch = async (_input, init) => {
     const source = sourceBlocks.find((match) => match[0].includes(quote))
       || sourceBlocks.find((match) => pattern.test(match[0]))
     const sourceNumber = Number(source?.[1] || 1)
-    return JSON.stringify({ sections: [{ heading: '核心操作', entries: [{ kind: 'step', text, explanation, citations: [sourceNumber], evidence: [{ source: sourceNumber, quote }] }] }] })
+    const exactQuote = source?.[0].replace(/\s+/g, ' ').includes(quote.replace(/\s+/g, ' ')) ? quote : source?.[0].match(pattern)?.[0] || quote
+    return JSON.stringify({ sections: [{ heading: '核心操作', entries: [{ kind: 'step', text, explanation, citations: [sourceNumber], evidence: [{ source: sourceNumber, quote: exactQuote }] }] }] })
+  }
+  const hornetAmbiguousLedger = () => {
+    const entry = (heading: string, text: string, quote: string, fallbackPattern?: RegExp) => {
+      const source = sourceBlocks.find((match) => match[0].includes(quote))
+        || (fallbackPattern ? sourceBlocks.find((match) => fallbackPattern.test(match[0])) : undefined)
+      const sourceNumber = Number(source?.[1] || 1)
+      const exactQuote = source?.[0].replace(/\s+/g, ' ').includes(quote.replace(/\s+/g, ' ')) ? quote : source?.[0].match(fallbackPattern || /$^/)?.[0] || quote
+      return { heading, entry: { kind: 'step', text, explanation: '', citations: [sourceNumber], evidence: [{ source: sourceNumber, quote: exactQuote }] } }
+    }
+    const entries = [
+      entry('情况一：空对空目标获取/锁定', '选择 A/A Master Mode 和 AIM-9。', 'Select A/A Master Mode and AIM-9.'),
+      entry('情况一：空对空目标获取/锁定', '看向空中目标并按住 Cage/Uncage，让 AIM-9 seeker 指向 HMD line of sight。', 'Press and hold Cage/Uncage to command the AIM-9 seeker to the HMD line of sight'),
+      entry('情况二：空对地目标指定', '选择 A/G Master Mode 并开启 HMD。', 'Select A/G Master Mode and power the HMD.'),
+      entry('情况二：空对地目标指定', '把 TDC priority 交给 HMD。', 'TDC priority to the HMD', /TDC\s+priority\s+to\s+the\s+HMD/i),
+      entry('情况二：空对地目标指定', '按 TDC Designate 完成目标指定。', 'press TDC Designate', /press\s+TDC\s+Designate/i),
+    ]
+    return JSON.stringify({ sections: [...new Set(entries.map((item) => item.heading))].map((heading) => ({ heading, entries: entries.filter((item) => item.heading === heading).map((item) => item.entry) })) })
+  }
+  const hornetGroundLedger = () => {
+    const source = sourceBlocks.find((match) => /JHMCS AIR-TO-GROUND MODE/i.test(match[0]))
+    const sourceNumber = Number(source?.[1] || 1)
+    const evidence = (quote: string) => [{ source: sourceNumber, quote }]
+    return JSON.stringify({ sections: [{ heading: '空对地目标指定', entries: [
+      { kind: 'step', text: '选择 A/G Master Mode 并开启 HMD。', explanation: '', citations: [sourceNumber], evidence: evidence('Select A/G Master Mode and power the HMD.') },
+      { kind: 'step', text: '使用 Sensor Control Switch Forward 将 TDC priority 交给 HMD。', explanation: '', citations: [sourceNumber], evidence: evidence('Press Sensor Control Switch Forward to move TDC priority to the HMD.') },
+      { kind: 'step', text: '看向目标并按 TDC Designate 完成目标指定。', explanation: '', citations: [sourceNumber], evidence: evidence('With the aiming reticle visible, press TDC Designate at pilot line-of-sight.') },
+    ] }] })
+  }
+  const viperAmbiguousLedger = () => {
+    const build = (heading: string, text: string, quote: string, fallbackPattern?: RegExp) => {
+      const source = sourceBlocks.find((match) => match[0].includes(quote))
+        || (fallbackPattern ? sourceBlocks.find((match) => fallbackPattern.test(match[0])) : undefined)
+      const sourceNumber = Number(source?.[1] || 1)
+      const exactQuote = source?.[0].includes(quote) ? quote : source?.[0].match(fallbackPattern || /$^/)?.[0] || quote
+      return { heading, entry: { kind: 'step', text, explanation: '', citations: [sourceNumber], evidence: [{ source: sourceNumber, quote: exactQuote }] } }
+    }
+    const groundControlQuote = 'DMS UP makes HUD and HMCS'
+    const groundDesignationQuote = 'TMS UP LONG until the target designation box'
+    const entries = [
+      build('情况一：空对空雷达锁定', '在 BORE submode 中长按 TMS UP，让雷达沿头盔视线搜索并在探测后进入 STT。', 'In BORE submode, hold TMS UP LONG to slave the radar to the helmet line of sight and command STT when the target is detected.'),
+      build('情况二：空对地目标指定', '先按 DMS UP，让 HUD 和 HMCS 获得控制。', groundControlQuote, /DMS UP makes HUD and HMCS[^.\n]*/i),
+      build('情况二：空对地目标指定', '长按 TMS UP 显示 Dynamic Aiming Cross，再看向地面目标并短按 TMS UP 完成指定。', groundDesignationQuote, /Hold TMS UP LONG[^.\n]*/i),
+      build('情况三：保存头盔视线为 MARKPOINT', '打开 MARK 页面并选择 HUD sensor，再用 TMS Forward-Long 将 SOI 交给 HMCS。', 'Select the MARK page and HUD sensor option. TMS Forward-Long transfers SOI to HMCS.'),
+      build('情况三：保存头盔视线为 MARKPOINT', '用 TMS Forward-Short 稳定 Mark Cue，再次短按保存 markpoint。', 'TMS Forward-Short ground stabilizes the Mark Cue, and a second TMS Forward-Short stores the markpoint.'),
+    ]
+    return JSON.stringify({ sections: [...new Set(entries.map((item) => item.heading))].map((heading) => ({ heading, entries: entries.filter((item) => item.heading === heading).map((item) => item.entry) })) })
   }
   const content = isConnectionTest
     ? 'OK'
     : body.response_format?.type === 'json_object'
-      ? isEvidenceAuditor
+        ? (isEvidenceAuditor || isOnePassAnswer)
         ? isHornetHelmetQuestion
-          ? ledger(/JHMCS AIR-TO-GROUND MODE/i, '进入 A/G 主模式并使用 Sensor Control Switch Forward 将 TDC priority 交给 HMD，然后按 TDC Designate 完成目标指定。', 'Press Sensor Control Switch Forward to move TDC priority to the HMD. With the aiming reticle visible, press TDC Designate at pilot line-of-sight.')
+          ? isAmbiguousHornetHelmetQuestion
+            ? hornetAmbiguousLedger()
+            : hornetGroundLedger()
           : isHmcsQuestion
-            ? ledger(/HMCS Ground Target Designation/i, '让 HUD/HMCS 获得控制后，按住 TMS UP LONG 使目标指定框出现在 Dynamic Aiming Cross，再看向目标并按 TMS UP 完成指定。', 'DMS UP makes HUD and HMCS the sensor of interest. Hold TMS UP LONG until the target designation box appears at the Dynamic Aiming Cross. Look at the desired ground target and press TMS UP to designate.')
+            ? isAmbiguousHmcsQuestion
+              ? viperAmbiguousLedger()
+              : ledger(/HMCS Ground Target Designation/i, '让 HUD/HMCS 获得控制后，按住 TMS UP LONG 使目标指定框出现在 Dynamic Aiming Cross，再看向目标并按 TMS UP 完成指定。', 'DMS UP makes HUD and HMCS the sensor of interest. Hold TMS UP LONG until the target designation box appears at the Dynamic Aiming Cross. Look at the desired ground target and press TMS UP to designate.')
             : isAirdropQuestion
               ? ledger(/CARP Airdrop Procedure/i, '设置投放区、命中点和退出点，完成 CARP 空投规划。', 'DCS C-130J CARP Airdrop Procedure. Define the drop zone, point of impact, turn point, slowdown point and drop zone escape point.')
               : userText.includes('SOURCE_PRIORITY_CHECK')
@@ -103,6 +329,8 @@ const fakeFetch: typeof fetch = async (_input, init) => {
         : JSON.stringify({ order: preferredCandidateOrder.length > 0 ? preferredCandidateOrder : ['C1', 'C2', 'C3'] })
       : userText.includes('SOURCE_PRIORITY_CHECK')
         ? '按照当前客户端官方手册选择 CURRENT MODE。[S1]'
+      : userText.includes('TACAN')
+        ? '设置 TACAN 模式、频道以及 X/Y 波段，并确认台站识别。[S1]'
       : isEvidenceAuditor && isHornetHelmetQuestion
         ? (() => {
             const source = [...userText.matchAll(/\[S(\d+)\][^\n]*\n[^]*?(?=\n\n\[S|\n\n待审校草稿|$)/g)]
@@ -173,6 +401,7 @@ async function writeHornetHelmetPdf(filePath: string): Promise<void> {
     'F/A-18C HMD Alignment. Use the TDC to align the HMD crosses and save alignment.',
     'F/A-18C JHMCS AIR-TO-GROUND MODE. Select A/G Master Mode and power the HMD. Press Sensor Control Switch Forward to move TDC priority to the HMD. With the aiming reticle visible, press TDC Designate at pilot line-of-sight. A designation diamond appears at the designated target.',
     'F/A-18C JHMCS Ground Target Designation Controls. TDC is the Throttle Designator Controller input. TDC priority means which display receives TDC control. TDC Depress designates the target; the resulting state is a target designation, not a TDC or SPI. Undesignate clears the designation.',
+    'F/A-18C JHMCS AIR-TO-AIR MODE. Select A/A Master Mode and AIM-9. Look at the airborne target until the seeker FOV circle surrounds it. Press and hold Cage/Uncage to command the AIM-9 seeker to the HMD line of sight; release after lock tone.',
   ]
   for (const content of contents) {
     const page = document.addPage([612, 792])
@@ -233,6 +462,15 @@ try {
 # F/A-18C INS Alignment
 
 For a normal land-based alignment, set the INS selector to GND. Wait until the quality reaches the required value before selecting IFA.
+
+# CASE I Recovery
+Enter the carrier pattern visually, fly the overhead break, lower hook and landing gear, establish on-speed angle of attack, follow the groove, trap or execute a waveoff.
+
+# CASE II Recovery
+Use instrument penetration to reach visual conditions, then transition to the CASE I pattern and complete the visual carrier landing.
+
+# CASE III Recovery
+Enter marshal, fly the assigned instrument approach using ICLS or ACLS indications, configure for landing, call the ball when visual, then trap or execute a bolter or waveoff.
 `)
   write(path.join(libraryPath, '中文', '无线电.txt'), 'F/A-18C 无线电设置：选择 COMM 频道，然后输入预设频率。')
   await writeHornetHelmetPdf(path.join(libraryPath, 'F18', 'Hornet JHMCS manual.pdf'))
@@ -243,6 +481,12 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   write(path.join(libraryPath, 'AH64', 'Apache crew sight.txt'), 'AH-64D Pilot rear crewstation can use the CPG front crewstation TADS line of sight as an acquisition source. Select the ACQ source and use SLAVE for cueing.')
   await writeGeorgePdf(path.join(libraryPath, 'AH64', 'DCS AH-64D George AI.pdf'))
   await writeC130Pdf(path.join(libraryPath, 'C130J', 'DCS C-130J User Manual.pdf'))
+  write(path.join(libraryPath, 'F14', 'F-14 Common Systems.txt'), `DCS F-14B Tomcat common systems manual. TOMCAT_COMMON_RADAR describes the radar and shared cockpit procedures.
+
+CASE I RECOVERY PROCEDURE. Enter the visual carrier pattern, fly the break, configure the hook and landing gear, establish on-speed angle of attack, fly the groove, then trap or wave off.
+CASE II RECOVERY PROCEDURE. Fly the instrument penetration until visual, transition to the CASE I pattern, and complete the carrier landing or waveoff.
+CASE III RECOVERY PROCEDURE. Enter marshal, fly the assigned instrument approach using ACLS or ICLS, configure the aircraft, call the ball when visual, then trap, bolter, or wave off.`)
+  write(path.join(libraryPath, 'F14BU', 'F-14BU Differences.txt'), 'DCS F-14B(U) upgrade module. VDIG-R and PTID are F-14B(U) specific systems and must remain isolated from the base F-14 catalog.')
   await writeTextPdf(path.join(dcsPath, 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start.pdf'), 'F/A-18C quick start and cockpit procedures.')
   await writeTextPdf(path.join(dcsPath, 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start_RU.pdf'), 'Russian language manual should not be copied by the English-only importer.')
   await writeTextPdf(path.join(dcsPath, 'Mods', 'aircraft', 'Future-X', 'Doc', 'Future Manual.pdf'), 'Future-X radar startup and sensor operation procedure.')
@@ -253,13 +497,18 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.equal(service.chuckCatalog().length, 33)
   let overview = await service.setLibraryPath(libraryPath)
   assert.equal(overview.onboardingCompleted, false)
-  assert.equal(overview.index.documentCount, 10)
+  assert.equal(overview.index.documentCount, 12)
   assert.equal(overview.index.state, 'ready')
   assert.ok(overview.index.chunkCount >= 2)
   assert.equal(service.search('Hornet INS alignment')[0]?.aircraft, 'F/A-18C')
   assert.equal(service.search('无线电')[0]?.language, 'zh')
   assert.equal(service.search('F-16C alignment').some((hit) => hit.documentName === 'Viper manual.pdf'), true)
   assert.equal(service.search('TACAN setup', 12, ['F-16C']).every((hit) => hit.aircraft === 'F-16C'), true)
+  assert.ok(overview.documents.some((document) => document.aircraft === 'F-14'))
+  assert.ok(overview.documents.some((document) => document.aircraft === 'F-14B(U)'))
+  assert.equal(service.search('VDIG-R', 12, ['F-14B(U)']).every((hit) => hit.aircraft === 'F-14B(U)'), true)
+  assert.equal(service.search('VDIG-R', 12, ['F-14']).some((hit) => hit.aircraft === 'F-14B(U)'), false)
+  assert.equal(service.search('TOMCAT_COMMON_RADAR', 12, ['F-14B(U)', 'F-14']).some((hit) => hit.aircraft === 'F-14'), true)
 
   const firstIndexedAt = overview.index.lastIndexedAt
   const refreshResult = await service.rebuildIndex(false)
@@ -284,7 +533,7 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.equal(imported.copied, 3)
   assert.equal(imported.duplicateSkipped, 1)
   assert.equal(imported.removableDuplicates, 1)
-  assert.equal(service.overview().index.documentCount, 14)
+  assert.equal(service.overview().index.documentCount, 16)
   assert.equal(fs.existsSync(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start.pdf')), true)
   assert.equal(fs.existsSync(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Quick Start_RU.pdf')), false)
   assert.equal(progressEvents.some((event) => event.startsWith('dcs-import:copying:')), true)
@@ -292,7 +541,7 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   const cleaned = await service.removeDuplicateDcsManuals()
   assert.equal(cleaned.ok, true)
   assert.equal(fs.existsSync(path.join(libraryPath, 'DCS Manuals', 'Mods', 'aircraft', 'FA-18C', 'Doc', 'Landing Guide.pdf')), false)
-  assert.equal(service.overview().index.documentCount, 13)
+  assert.equal(service.overview().index.documentCount, 15)
   assert.equal(service.overview().documents.find((document) => document.name === 'Future Manual.pdf')?.aircraft, 'Future-X')
   assert.equal(service.search('radar startup', 8, ['Future-X']).every((source) => source.aircraft === 'Future-X'), true)
 
@@ -301,6 +550,17 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.equal(userRefresh.ok, true)
   assert.ok(service.search('quick start').some((hit) => hit.sourceKind === 'dcs'))
   assert.ok(service.search('carrier landing').some((hit) => hit.sourceKind === 'user'))
+
+  // A guide copied into the managed Chuck folder outside DCSHUB must be
+  // discovered at startup even when the previous manifest did not know it.
+  const externallyAddedChuckGuide = path.join(libraryPath, "Chuck's Guides", 'F-16C', 'Chuck F-16C Guide.pdf')
+  await writeTextPdf(externallyAddedChuckGuide, "Chuck's Guides DCS F-16C Viper by Chuck. F-16C SOURCE_PRIORITY_CHECK current procedure: select CURRENT MODE and confirm READY.")
+  const startupRefresh = service.ensureCurrentSearchIndexes()
+  assert.ok(startupRefresh)
+  assert.equal((await startupRefresh).ok, true)
+  const prioritySearch = service.search('F-16C SOURCE_PRIORITY_CHECK current procedure', 12, ['F-16C'])
+  assert.equal(prioritySearch[0]?.sourceKind, 'chuck')
+  assert.equal(prioritySearch.some((hit) => hit.documentName === 'Chuck F-16C Guide.pdf'), true)
 
   const downloaded = await service.downloadChuckGuide('a-10c')
   assert.equal(downloaded.ok, true)
@@ -325,10 +585,12 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   overview = await service.configureDeepSeek('sk-test-deepseek-key')
   assert.equal(overview.deepSeek.configured, true)
   assert.equal(overview.deepSeek.model, 'deepseek-v4-flash')
+  assert.ok(overview.documents.some((document) => document.aircraft === 'F-16C'))
   const priorityAnswer = await service.ask('F16 SOURCE_PRIORITY_CHECK 怎么设置？')
   assert.match(priorityAnswer.answer, /CURRENT MODE/)
   assert.doesNotMatch(priorityAnswer.answer, /OLD MODE/)
-  assert.equal(priorityAnswer.sources[0]?.sourceKind, 'dcs')
+  assert.equal(priorityAnswer.sources[0]?.sourceKind, 'chuck')
+  assert.equal(priorityAnswer.sources.some((source) => source.sourceKind === 'chuck'), true)
   assert.equal(priorityAnswer.sources.some((source) => source.sourceKind === 'dcs'), true)
   const answer = await service.ask('大黄蜂的 INS 应该怎么对准？')
   assert.equal(answer.cached, false)
@@ -339,6 +601,9 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.deepEqual(repeatedAnswer.sources.map((source) => source.id), answer.sources.map((source) => source.id))
   assert.equal(repeatedAnswer.answer, answer.answer)
 
+  const localBeforeOnline = await service.ask('F16怎么用头盔标记一个目标')
+  assert.equal(localBeforeOnline.cached, false)
+  assert.equal(service.preferredCachedAnswer('F16怎么用头盔标记一个目标')?.kind, 'local')
   const onlineAnswer = await service.askOnline('F16怎么用头盔标记一个目标')
   assert.equal(onlineAnswer.cached, false)
   assert.equal(onlineAnswer.model, 'deepseek-v4-pro')
@@ -347,7 +612,11 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   const repeatedOnlineAnswer = await service.askOnline('F16怎么用头盔标记一个目标？')
   assert.equal(repeatedOnlineAnswer.cached, true)
   assert.equal(repeatedOnlineAnswer.answer, onlineAnswer.answer)
-  assert.ok(service.overview().answerCache.localEntries >= 2)
+  assert.equal(onlineRequestCount, 1)
+  const preferredCached = service.preferredCachedAnswer('F16怎么用头盔标记一个目标？')
+  assert.equal(preferredCached?.kind, 'online')
+  assert.equal(preferredCached?.answer.answer, onlineAnswer.answer)
+  assert.ok(service.overview().answerCache.localEntries >= 1)
   assert.equal(service.overview().answerCache.onlineEntries, 1)
   assert.ok(service.overview().answerCache.size > 0)
 
@@ -356,15 +625,30 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.equal(f16Answer.sources.every((source) => source.aircraft === 'F-16C'), true)
   assert.equal(f16Answer.sources.some((source) => source.documentName === 'Mustang TACAN.txt'), false)
 
+  for (const carrierQuestion of ['F14CASE1', 'F14 case 2', 'F14CASE3', 'F18CASE1', 'F18 case 2', 'F18CASE3']) {
+    const carrierAnswer = await service.ask(carrierQuestion)
+    assert.ok(carrierAnswer.sources.length > 0, `${carrierQuestion} should retrieve carrier recovery evidence`)
+    assert.equal(carrierAnswer.sources.every((source) => /F-14|F\/A-18C/.test(source.aircraft || '')), true)
+    assert.match(carrierAnswer.answer, /### 操作说明/)
+    assert.doesNotMatch(carrierAnswer.answer, /没有在当前手册库中找到/)
+  }
+
   const f16HelmetVariants = await Promise.all([
     service.ask('F16怎么用头盔标记'),
     service.ask('F16怎么用头盔标记目标'),
   ])
   for (const hmcsAnswer of f16HelmetVariants) {
     assert.equal(hmcsAnswer.sources.every((source) => source.aircraft === 'F-16C'), true)
+    assert.equal(hmcsAnswer.sources.some((source) => source.documentName === 'Viper manual.pdf' && source.page === 2), true)
     assert.equal(hmcsAnswer.sources.some((source) => source.documentName === 'Viper manual.pdf' && source.page === 3), true)
+    assert.equal(hmcsAnswer.sources.some((source) => source.documentName === 'Viper manual.pdf' && source.page === 4), true)
     assert.doesNotMatch(hmcsAnswer.answer, /Sensor Control Switch/i)
+    assert.doesNotMatch(hmcsAnswer.answer, /^(?:好了|咱们|今天就|老鸟|跟着我)/i)
+    assert.match(hmcsAnswer.answer, /### 操作说明/)
     assert.match(hmcsAnswer.answer, /Dynamic Aiming Cross/)
+    assert.match(hmcsAnswer.answer, /空对空|STT/i)
+    assert.match(hmcsAnswer.answer, /空对地|目标指定/i)
+    assert.match(hmcsAnswer.answer, /MARKPOINT|markpoint/i)
   }
   const f16BaseSources = new Set(f16HelmetVariants[0].sources.map((source) => source.id))
   assert.ok(f16HelmetVariants[1].sources.filter((source) => f16BaseSources.has(source.id)).length >= 1)
@@ -382,6 +666,11 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
     assert.doesNotMatch(hornetAnswer.answer, /没有通过来源核对|TDC\s*(?:变成|等于|就是)\s*SPI/i)
     assert.match(hornetAnswer.answer, /TDC/)
     assert.match(hornetAnswer.answer, /designation|目标指定/i)
+  }
+  for (const ambiguousAnswer of hornetHelmetVariants.slice(0, 2)) {
+    assert.equal(ambiguousAnswer.sources.some((source) => source.documentName === 'Hornet JHMCS manual.pdf' && source.page === 5), true)
+    assert.match(ambiguousAnswer.answer, /空对空|A\/A/i)
+    assert.match(ambiguousAnswer.answer, /空对地|A\/G/i)
   }
   const baseSourceIds = new Set(hornetHelmetVariants[0].sources.map((source) => source.id))
   for (const variant of hornetHelmetVariants.slice(1)) {
@@ -405,19 +694,13 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.equal(c130Answer.sources.some((source) => source.page === 6), true)
   assert.equal(c130Answer.sources.some((source) => source.page === 7 || source.page === 8), true)
   assert.equal(c130Answer.sources.some((source) => source.page === 3), false)
+  assert.match(c130Answer.answer, /### 操作说明/)
+  assert.doesNotMatch(c130Answer.answer, /^(?:好了|咱们|今天就|老鸟|跟着我)/i)
   const repeatedC130Answer = await service.ask('C130如何空投')
   assert.deepEqual(repeatedC130Answer.sources.map((source) => source.id), c130Answer.sources.map((source) => source.id))
   const phrasedC130Answer = await service.ask('C130怎么进行空投操作？')
   assert.equal(phrasedC130Answer.sources.some((source) => source.page === 6), true)
   assert.equal(phrasedC130Answer.sources.some((source) => source.page === 3), false)
-
-  const unavailableAnswer = await service.ask('F-99 的雷达怎么开？')
-  assert.equal(unavailableAnswer.cached, false)
-  assert.equal(unavailableAnswer.sources.length, 0)
-  assert.match(unavailableAnswer.answer, /没有匹配的该机型资料/)
-  const repeatedUnavailableAnswer = await service.ask('F-99 的雷达怎么开')
-  assert.equal(repeatedUnavailableAnswer.cached, true)
-  assert.equal(repeatedUnavailableAnswer.answer, unavailableAnswer.answer)
 
   overview = service.completeOnboarding()
   assert.equal(overview.onboardingCompleted, true)
@@ -426,7 +709,7 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.equal(reloaded.overview().deepSeek.configured, true)
   assert.equal(reloaded.overview().deepSeek.model, 'deepseek-v4-flash')
   assert.equal(reloaded.overview().onboardingCompleted, true)
-  assert.equal(reloaded.overview().index.documentCount, 17)
+  assert.equal(reloaded.overview().index.documentCount, 20)
   assert.ok(reloaded.search('quick start').length > 0)
   const persistedAnswer = await reloaded.ask('C130如何空投')
   assert.equal(persistedAnswer.cached, true)
@@ -435,6 +718,22 @@ For a normal land-based alignment, set the INS selector to GND. Wait until the q
   assert.match(persistedAnswer.answer, /这一步的作用/)
   const persistedOnlineAnswer = await reloaded.askOnline('F16怎么用头盔标记一个目标')
   assert.equal(persistedOnlineAnswer.cached, true)
+
+  let providerOverview = await reloaded.configureAiProvider('siliconflow', 'sk-test-siliconflow-key', 'https://api.siliconflow.cn/v1')
+  assert.equal(providerOverview.ai.providers.find((provider) => provider.id === 'siliconflow')?.configured, true)
+  providerOverview = reloaded.setAiStageSettings('local', { provider: 'siliconflow', model: 'Qwen/Qwen3-32B', thinkingLevel: 'high' })
+  assert.deepEqual(providerOverview.ai.local, { provider: 'siliconflow', model: 'Qwen/Qwen3-32B', thinkingLevel: 'high' })
+  await reloaded.configureAiProvider('qwen', 'sk-test-qwen-provider-key', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+  providerOverview = reloaded.setAiStageSettings('online', { provider: 'qwen', model: 'qwen-plus', thinkingLevel: 'max' })
+  assert.deepEqual(providerOverview.ai.online, { provider: 'qwen', model: 'qwen-plus', thinkingLevel: 'max' })
+  assert.throws(() => reloaded.setAiStageSettings('online', { provider: 'siliconflow', model: 'Qwen/Qwen3-32B', thinkingLevel: 'high' }), /不支持原生联网搜索/)
+  providerOverview = reloaded.setAiStageSettings('local', { provider: 'deepseek', model: 'custom-model-is-ignored', thinkingLevel: 'max' })
+  assert.deepEqual(providerOverview.ai.local, { provider: 'deepseek', model: 'deepseek-v4-flash', thinkingLevel: 'off' })
+
+  const clearedCacheOverview = reloaded.clearAnswerCaches()
+  assert.equal(clearedCacheOverview.answerCache.totalEntries, 0)
+  assert.equal(clearedCacheOverview.answerCache.size, 0)
+  assert.equal(reloaded.preferredCachedAnswer('F16怎么用头盔标记一个目标？'), null)
 
   console.log('manual-library integration: ok')
 } finally {

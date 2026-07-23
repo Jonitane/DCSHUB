@@ -1,4 +1,6 @@
 export type ManualSourceKind = 'user' | 'dcs' | 'chuck'
+export type ManualOfficialModuleType = 'full-fidelity' | 'non-full-click' | 'unknown'
+export type ManualClassificationConfidence = 'high' | 'medium' | 'low'
 
 export type ManualIndexState = 'idle' | 'indexing' | 'ready' | 'error'
 
@@ -22,6 +24,11 @@ export interface ManualDocumentRecord {
   relativePath: string
   sourcePath: string
   sourceKind: ManualSourceKind
+  sourceVersion: string | null
+  officialModuleType: ManualOfficialModuleType | null
+  isTranslation: boolean
+  translatedFrom: Exclude<ManualSourceKind, 'user'> | null
+  classificationConfidence: ManualClassificationConfidence
   extension: string
   language: string
   aircraft: string | null
@@ -43,6 +50,34 @@ export interface ManualIndexStatus {
   lastError?: string
 }
 
+export type ManualAiProvider = 'deepseek' | 'siliconflow' | 'qwen'
+export type ManualAiThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'max'
+export type ManualAiStage = 'local' | 'online'
+/** Language selected in the main HUB UI, used for generated manual answers. */
+export type ManualAnswerLanguage = 'zh' | 'en'
+
+export interface ManualAiStageSettings {
+  provider: ManualAiProvider
+  model: string
+  thinkingLevel: ManualAiThinkingLevel
+}
+
+export interface ManualAiProviderStatus {
+  id: ManualAiProvider
+  name: string
+  configured: boolean
+  supportsOnlineSearch: boolean
+  baseUrl: string
+}
+
+export interface ManualAiConfigurationStatus {
+  configured: boolean
+  providers: ManualAiProviderStatus[]
+  local: ManualAiStageSettings
+  online: ManualAiStageSettings
+}
+
+/** @deprecated Kept for renderer compatibility while older cached windows close. */
 export interface DeepSeekConfigurationStatus {
   configured: boolean
   model: 'deepseek-v4-flash' | 'deepseek-v4-pro'
@@ -65,6 +100,7 @@ export interface ManualLibraryOverview {
   index: ManualIndexStatus
   answerCache: ManualAnswerCacheStatus
   deepSeek: DeepSeekConfigurationStatus
+  ai: ManualAiConfigurationStatus
 }
 
 export interface ManualSearchHit {
@@ -74,9 +110,18 @@ export interface ManualSearchHit {
   relativePath: string
   sourcePath: string
   sourceKind: ManualSourceKind
+  sourceVersion: string | null
+  officialModuleType: ManualOfficialModuleType | null
+  isTranslation: boolean
+  translatedFrom: Exclude<ManualSourceKind, 'user'> | null
+  classificationConfidence: ManualClassificationConfidence
   language: string
   aircraft: string | null
   page: number | null
+  sectionTitle?: string
+  sectionPath?: string
+  sectionStartPage?: number
+  sectionEndPage?: number
   excerpt: string
   score: number
 }
@@ -96,9 +141,13 @@ export interface ManualOnlineSearchSource {
 export interface ManualOnlineSearchAnswer {
   answer: string
   sources: ManualOnlineSearchSource[]
-  model: 'deepseek-v4-pro'
+  model: string
   cached: boolean
 }
+
+export type ManualCachedAnswerMatch =
+  | { kind: 'online'; answer: ManualOnlineSearchAnswer }
+  | { kind: 'local'; answer: ManualQuestionAnswer }
 
 export interface ManualPagePreview {
   documentId: string
@@ -136,8 +185,15 @@ export interface ManualLibraryBridge {
   rebuildIndex: (force?: boolean) => Promise<ManualOperationResult>
   importDcsManuals: () => Promise<DcsManualImportResult>
   search: (query: string, limit?: number) => Promise<ManualSearchHit[]>
-  ask: (question: string) => Promise<ManualQuestionAnswer>
-  askOnline: (question: string) => Promise<ManualOnlineSearchAnswer>
+  ask: (question: string, language?: ManualAnswerLanguage) => Promise<ManualQuestionAnswer>
+  askOnline: (question: string, language?: ManualAnswerLanguage) => Promise<ManualOnlineSearchAnswer>
+  preferredCachedAnswer: (question: string, language?: ManualAnswerLanguage) => Promise<ManualCachedAnswerMatch | null>
+  clearAnswerCaches: () => Promise<ManualLibraryOverview>
+  configureAiProvider: (provider: ManualAiProvider, apiKey: string, baseUrl?: string) => Promise<ManualLibraryOverview>
+  clearAiProvider: (provider: ManualAiProvider) => Promise<ManualLibraryOverview>
+  testAiProvider: (provider: ManualAiProvider, apiKey?: string, baseUrl?: string) => Promise<ManualOperationResult>
+  setAiStageSettings: (stage: ManualAiStage, settings: ManualAiStageSettings) => Promise<ManualLibraryOverview>
+  listAiProviderModels: (provider: ManualAiProvider) => Promise<string[]>
   configureDeepSeek: (apiKey: string) => Promise<ManualLibraryOverview>
   clearDeepSeek: () => Promise<ManualLibraryOverview>
   testDeepSeek: (apiKey?: string) => Promise<ManualOperationResult>
@@ -152,4 +208,5 @@ export interface ManualLibraryBridge {
   pagePreview: (documentId: string, page: number) => Promise<ManualPagePreview | null>
   askWithScreenshot: (question: string, imageDataUrl: string) => Promise<ManualQuestionAnswer>
   onProgress: (listener: (progress: ManualLibraryProgress) => void) => () => void
+  onOverviewChanged: (listener: (overview: ManualLibraryOverview) => void) => () => void
 }

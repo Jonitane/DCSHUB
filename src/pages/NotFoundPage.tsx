@@ -2,8 +2,10 @@ import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Home, Compass } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useI18n } from '@/lib/i18n';
 
 export default function NotFoundPage() {
+  const { t } = useI18n();
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center">
       <motion.div
@@ -18,9 +20,9 @@ export default function NotFoundPage() {
           </div>
           <div className="space-y-2">
             <h1 className="text-4xl font-bold tracking-tight text-foreground">404</h1>
-            <p className="text-lg font-medium text-muted-foreground">页面未找到</p>
+            <p className="text-lg font-medium text-muted-foreground">{t('notFound.title')}</p>
             <p className="text-sm text-muted-foreground/70 max-w-md">
-              您访问的页面不存在或已被移除，请检查链接是否正确，或返回仪表板继续操作。
+              {t('notFound.description')}
             </p>
           </div>
         </div>
@@ -29,7 +31,7 @@ export default function NotFoundPage() {
           <Link to="/">
             <Button className="gap-2 bg-primary hover:bg-primary/90 shadow-[0_0_16px_rgba(45_212_191_0.25)]">
               <Home className="size-4" />
-              返回仪表板
+              {t('notFound.back')}
             </Button>
           </Link>
         </div>

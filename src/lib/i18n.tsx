@@ -1,11 +1,22 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { DEFAULT_LANGUAGE, LANGUAGE_STORAGE_KEY, normalizeLanguage, translateStaticText, type AppLanguage } from './i18n-core'
+import {
+  DEFAULT_LANGUAGE,
+  LANGUAGE_STORAGE_KEY,
+  isMessageKey,
+  normalizeLanguage,
+  translateMessage,
+  translateStaticText,
+  type AppLanguage,
+  type MessageKey,
+  type MessageParameters,
+} from './i18n-core'
 
 interface LanguageContextValue {
   language: AppLanguage
   setLanguage(language: AppLanguage): void
   toggleLanguage(): void
-  t(value: string): string
+  t(key: MessageKey, parameters?: MessageParameters): string
+  text(value: string): string
 }
 
 const LanguageContext = createContext<LanguageContextValue | null>(null)
@@ -26,7 +37,9 @@ function localizeTextNode(node: Text, language: AppLanguage): void {
     return
   }
   let source = originalText.get(node)
-  if (source === undefined || /[\p{Script=Han}]/u.test(current)) {
+  const containsSourceLanguage = /[\p{Script=Han}]/u.test(current)
+  if (source === undefined && !containsSourceLanguage) return
+  if (source === undefined || containsSourceLanguage) {
     source = current
     originalText.set(node, source)
   }
@@ -50,7 +63,9 @@ function localizeElement(element: Element, language: AppLanguage): void {
       originalAttributes.set(element, sources)
     }
     let source = sources.get(attribute)
-    if (source === undefined || /[\p{Script=Han}]/u.test(current)) {
+    const containsSourceLanguage = /[\p{Script=Han}]/u.test(current)
+    if (source === undefined && !containsSourceLanguage) continue
+    if (source === undefined || containsSourceLanguage) {
       source = current
       sources.set(attribute, source)
     }
@@ -86,7 +101,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     try { window.localStorage.setItem(LANGUAGE_STORAGE_KEY, next) } catch { /* Ignore unavailable storage. */ }
   }, [])
   const toggleLanguage = useCallback(() => setLanguage(language === 'zh-CN' ? 'en-US' : 'zh-CN'), [language, setLanguage])
-  const t = useCallback((value: string) => translateStaticText(value, language), [language])
+  const t = useCallback((key: MessageKey, parameters?: MessageParameters) => translateMessage(key, language, parameters), [language])
+  const text = useCallback((value: string) => isMessageKey(value) ? translateMessage(value, language) : translateStaticText(value, language), [language])
 
   useEffect(() => {
     document.documentElement.lang = language
@@ -102,7 +118,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     return () => observer.disconnect()
   }, [language])
 
-  const value = useMemo(() => ({ language, setLanguage, toggleLanguage, t }), [language, setLanguage, toggleLanguage, t])
+  const value = useMemo(() => ({ language, setLanguage, toggleLanguage, t, text }), [language, setLanguage, toggleLanguage, t, text])
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>
 }
 

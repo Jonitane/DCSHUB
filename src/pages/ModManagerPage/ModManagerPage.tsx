@@ -40,7 +40,7 @@ function formatBackupDate(value: string | null | undefined): string {
 }
 
 export default function ModManagerPage() {
-  const { t } = useI18n()
+  const { text } = useI18n()
   const [overview, setOverview] = useState<ModManagerOverview | null>(null)
   const [selectedModId, setSelectedModId] = useState<string | null>(null)
   const [selectedPresetId, setSelectedPresetId] = useState('')
@@ -77,12 +77,12 @@ export default function ModManagerPage() {
   const selectedMod = useMemo(() => overview?.mods.find((mod) => mod.id === selectedModId) || null, [overview, selectedModId])
 
   const chooseBackupDirectory = async () => {
-    const selected = await window.electronAPI?.modManager.chooseDirectory(t('选择原文件备份目录'))
+    const selected = await window.electronAPI?.modManager.chooseDirectory(text('选择原文件备份目录'))
     if (selected) setSettings((current) => ({ ...current, backupPath: selected }))
   }
 
   const chooseGameDirectory = async (index: number, field: 'path' | 'modsPath', title: string) => {
-    const selected = await window.electronAPI?.modManager.chooseDirectory(t(title))
+    const selected = await window.electronAPI?.modManager.chooseDirectory(text(title))
     if (!selected) return
     setSettings((current) => ({
       ...current,

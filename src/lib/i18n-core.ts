@@ -3,6 +3,48 @@ export type AppLanguage = 'zh-CN' | 'en-US'
 export const DEFAULT_LANGUAGE: AppLanguage = 'zh-CN'
 export const LANGUAGE_STORAGE_KEY = 'dcshub-language'
 
+const MESSAGE_CATALOG = {
+  'app.loading': { 'zh-CN': '正在加载…', 'en-US': 'Loading…' },
+  'app.loadingModules': { 'zh-CN': '正在加载模块…', 'en-US': 'Loading modules…' },
+  'app.name': { 'zh-CN': 'Dcs Hub', 'en-US': 'Dcs Hub' },
+  'app.subtitle': { 'zh-CN': 'Flight Sim', 'en-US': 'Flight Sim' },
+  'language.switchToEnglish': { 'zh-CN': '切换到英文', 'en-US': 'Switch to English' },
+  'language.switchToChinese': { 'zh-CN': '切换到中文', 'en-US': 'Switch to Chinese' },
+  'nav.dashboard': { 'zh-CN': '仪表板', 'en-US': 'Dashboard' },
+  'nav.superManual': { 'zh-CN': '超级手册', 'en-US': 'Super Manual' },
+  'nav.modManager': { 'zh-CN': '模组管理器', 'en-US': 'Mod Manager' },
+  'nav.settings': { 'zh-CN': '设置', 'en-US': 'Settings' },
+  'nav.addSoftware': { 'zh-CN': '添加软件', 'en-US': 'Add Software' },
+  'nav.exit': { 'zh-CN': '退出', 'en-US': 'Exit' },
+  'nav.exitApp': { 'zh-CN': '退出 DCSHUB', 'en-US': 'Exit DCSHUB' },
+  'dashboard.subtitle': { 'zh-CN': '模块运行与编排中心', 'en-US': 'Module runtime and orchestration center' },
+  'software.added': { 'zh-CN': '{name} 已添加', 'en-US': '{name} added' },
+  'software.addFailed': { 'zh-CN': '添加软件失败', 'en-US': 'Failed to add software' },
+  'notFound.title': { 'zh-CN': '页面未找到', 'en-US': 'Page not found' },
+  'notFound.description': { 'zh-CN': '您访问的页面不存在或已被移除，请检查链接是否正确，或返回仪表板继续操作。', 'en-US': 'The page does not exist or has been removed. Check the link or return to the dashboard.' },
+  'notFound.back': { 'zh-CN': '返回仪表板', 'en-US': 'Back to Dashboard' },
+  'update.available': { 'zh-CN': '发现 DCSHUB 推送更新', 'en-US': 'DCSHUB Update Available' },
+  'update.currentVersion': { 'zh-CN': '当前版本', 'en-US': 'Current version' },
+  'update.latestVersion': { 'zh-CN': '最新版本', 'en-US': 'Latest version' },
+  'update.contents': { 'zh-CN': '更新内容', 'en-US': 'What’s new' },
+  'update.later': { 'zh-CN': '稍后再说', 'en-US': 'Later' },
+  'update.open': { 'zh-CN': '前往更新', 'en-US': 'Open Update' },
+} as const
+
+export type MessageKey = keyof typeof MESSAGE_CATALOG
+export type MessageParameters = Record<string, string | number>
+
+export function translateMessage(key: MessageKey, language: AppLanguage, parameters: MessageParameters = {}): string {
+  const template = MESSAGE_CATALOG[key][language]
+  return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (placeholder, name: string) => (
+    Object.prototype.hasOwnProperty.call(parameters, name) ? String(parameters[name]) : placeholder
+  ))
+}
+
+export function isMessageKey(value: string): value is MessageKey {
+  return Object.prototype.hasOwnProperty.call(MESSAGE_CATALOG, value)
+}
+
 const ENGLISH_TEXT: Record<string, string> = {
   '仪表板': 'Dashboard',
   '模块运行与编排中心': 'Module runtime and orchestration center',
@@ -200,6 +242,18 @@ const ENGLISH_TEXT: Record<string, string> = {
   '深色与亮色界面': 'Dark and light appearance',
   '深色': 'Dark',
   '亮色': 'Light',
+  'HUB 设置': 'HUB Settings',
+  '主题、窗口、更新、日志与数据管理': 'Theme, window, updates, logs, and data',
+  '切换深色与亮色界面': 'Switch between dark and light appearance',
+  '记住主窗口位置和大小': 'Remember main window position and size',
+  '下次启动恢复当前窗口；显示器或分辨率改变时自动移回可见区域。': 'Restore this window on the next launch and keep it visible after display changes.',
+  '只提示发布者指定推送的版本，日常修复不会弹窗。': 'Only notify for publisher-approved releases; routine fixes stay silent.',
+  '诊断日志': 'Diagnostic Logs',
+  '自动轮转，并隐藏密钥、令牌和用户路径': 'Automatically rotated with keys, tokens, and user paths redacted',
+  '打开日志目录': 'Open Log Folder',
+  '清除所有设置与缓存': 'Clear All Settings and Cache',
+  '恢复首次运行状态并自动重新启动': 'Restore first-run state and restart automatically',
+  '清除缓存': 'Clear Cache',
   '配置一键启动和停止包含的软件': 'Choose the software included in Launch All and Stop All',
   '软件路径与管理': 'Software Paths & Management',
   '识别路径、选择主程序并控制模块加载': 'Detect paths, choose executables, and control loaded modules',

@@ -3,10 +3,11 @@ import type { ModManagerBridge, ModManagerSettings } from '../src/shared/mod-man
 import type { DcsBridge } from '../src/shared/dcs-contracts'
 import type { SoftwareCatalogBridge } from '../src/shared/software-catalog-contracts'
 import type { WindowControlsBridge, OverlayBridge } from '../src/shared/window-contracts'
-import type { ManualLibraryBridge, ManualLibraryProgress } from '../src/shared/manual-library-contracts'
+import type { ManualAnswerLanguage, ManualLibraryBridge, ManualLibraryProgress } from '../src/shared/manual-library-contracts'
 import type { UpdateBridge } from '../src/shared/update-contracts'
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron') as typeof import('electron')
+type DroppedFile = Parameters<typeof webUtils.getPathForFile>[0]
 
 const modules: ModuleBridge = {
   list: () => ipcRenderer.invoke('modules:list'),
@@ -85,12 +86,19 @@ const manualLibrary: ManualLibraryBridge = {
   currentProgress: () => ipcRenderer.invoke('manual-library:current-progress'),
   chooseLibraryDirectory: () => ipcRenderer.invoke('manual-library:choose-directory'),
   chooseManualFiles: () => ipcRenderer.invoke('manual-library:choose-files'),
-  importDroppedFiles: (files: ReadonlyArray<unknown>) => ipcRenderer.invoke('manual-library:import-files', files.map((file) => webUtils.getPathForFile(file as never))),
+  importDroppedFiles: (files: ReadonlyArray<unknown>) => ipcRenderer.invoke('manual-library:import-files', files.map((file) => webUtils.getPathForFile(file as DroppedFile))),
   rebuildIndex: (force = false) => ipcRenderer.invoke('manual-library:rebuild-index', force),
   importDcsManuals: () => ipcRenderer.invoke('manual-library:import-dcs-manuals'),
   search: (query: string, limit = 8) => ipcRenderer.invoke('manual-library:search', query, limit),
-  ask: (question: string) => ipcRenderer.invoke('manual-library:ask', question),
-  askOnline: (question: string) => ipcRenderer.invoke('manual-library:ask-online', question),
+  ask: (question: string, language?: ManualAnswerLanguage) => ipcRenderer.invoke('manual-library:ask', question, language),
+  askOnline: (question: string, language?: ManualAnswerLanguage) => ipcRenderer.invoke('manual-library:ask-online', question, language),
+  preferredCachedAnswer: (question: string, language?: ManualAnswerLanguage) => ipcRenderer.invoke('manual-library:preferred-cached-answer', question, language),
+  clearAnswerCaches: () => ipcRenderer.invoke('manual-library:clear-answer-caches'),
+  configureAiProvider: (provider, apiKey, baseUrl) => ipcRenderer.invoke('manual-library:configure-ai-provider', provider, apiKey, baseUrl),
+  clearAiProvider: (provider) => ipcRenderer.invoke('manual-library:clear-ai-provider', provider),
+  testAiProvider: (provider, apiKey, baseUrl) => ipcRenderer.invoke('manual-library:test-ai-provider', provider, apiKey, baseUrl),
+  setAiStageSettings: (stage, settings) => ipcRenderer.invoke('manual-library:set-ai-stage', stage, settings),
+  listAiProviderModels: (provider) => ipcRenderer.invoke('manual-library:list-ai-models', provider),
   configureDeepSeek: (apiKey: string) => ipcRenderer.invoke('manual-library:configure-deepseek', apiKey),
   clearDeepSeek: () => ipcRenderer.invoke('manual-library:clear-deepseek'),
   testDeepSeek: (apiKey?: string) => ipcRenderer.invoke('manual-library:test-deepseek', apiKey),
@@ -109,12 +117,20 @@ const manualLibrary: ManualLibraryBridge = {
     ipcRenderer.on('manual-library:progress', handler)
     return () => ipcRenderer.removeListener('manual-library:progress', handler)
   },
+  onOverviewChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, overview: Parameters<typeof listener>[0]) => listener(overview)
+    ipcRenderer.on('manual-library:overview-changed', handler)
+    return () => ipcRenderer.removeListener('manual-library:overview-changed', handler)
+  },
 }
 
 const windowControls: WindowControlsBridge = {
   quit: () => ipcRenderer.send('window:quit'),
   openUpdatePage: () => ipcRenderer.invoke('window:open-update-page'),
+  openLogsDirectory: () => ipcRenderer.invoke('window:open-logs-directory'),
   resetAllUserData: () => ipcRenderer.invoke('window:reset-all-user-data'),
+  getHubSettings: () => ipcRenderer.invoke('window:get-hub-settings'),
+  setRememberWindowBounds: (enabled: boolean) => ipcRenderer.invoke('window:set-remember-bounds', enabled),
 }
 
 const updates: UpdateBridge = {
@@ -128,6 +144,10 @@ const overlay: OverlayBridge = {
   hide: () => ipcRenderer.send('overlay:hide'),
   getSettings: () => ipcRenderer.invoke('overlay:get-settings'),
   setHotkey: (hotkey: string) => ipcRenderer.invoke('overlay:set-hotkey', hotkey),
+  setMicrophone: (microphoneId: string | null) => ipcRenderer.invoke('overlay:set-microphone', microphoneId),
+  listMicrophones: () => ipcRenderer.invoke('overlay:list-microphones'),
+  speechModelStatus: () => ipcRenderer.invoke('overlay:speech-model-status'),
+  downloadSpeechModel: () => ipcRenderer.invoke('overlay:download-speech-model'),
   setOpacity: (opacity: number) => ipcRenderer.invoke('overlay:set-opacity', opacity),
   setSize: (width: number, height: number) => ipcRenderer.invoke('overlay:set-size', width, height),
   setEnabled: (enabled: boolean) => ipcRenderer.invoke('overlay:set-enabled', enabled),
@@ -145,6 +165,21 @@ const overlay: OverlayBridge = {
     const handler = (_event: Electron.IpcRendererEvent, status: Parameters<typeof callback>[0]) => callback(status)
     ipcRenderer.on('overlay:display-mode-changed', handler)
     return () => ipcRenderer.removeListener('overlay:display-mode-changed', handler)
+  },
+  onSpeechState: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]) => callback(state)
+    ipcRenderer.on('overlay:speech-state', handler)
+    return () => ipcRenderer.removeListener('overlay:speech-state', handler)
+  },
+  onSpeechResult: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: string) => callback(value)
+    ipcRenderer.on('overlay:speech-result', handler)
+    return () => ipcRenderer.removeListener('overlay:speech-result', handler)
+  },
+  onSpeechModelProgress: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]) => callback(state)
+    ipcRenderer.on('overlay:speech-model-progress', handler)
+    return () => ipcRenderer.removeListener('overlay:speech-model-progress', handler)
   },
 }
 

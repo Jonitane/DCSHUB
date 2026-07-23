@@ -21,6 +21,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+#include <cwctype>
 
 #define LAYER_EXPORT __declspec(dllexport)
 
@@ -160,19 +161,43 @@ XrInstance gInstance = XR_NULL_HANDLE;
 Dispatch gDispatch;
 SharedFrameReader gSharedReader;
 std::unordered_map<XrSession, std::unique_ptr<SessionState>> gSessions;
+bool gOverlayEnabled = false;
+
+bool isDcsProcess() {
+  wchar_t executablePath[32768]{};
+  const DWORD length = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
+  if (length == 0 || length >= std::size(executablePath)) return false;
+  std::wstring_view path(executablePath, length);
+  const auto separator = path.find_last_of(L"\\/");
+  std::wstring name(path.substr(separator == std::wstring_view::npos ? 0 : separator + 1));
+  std::transform(name.begin(), name.end(), name.begin(), [](wchar_t value) { return std::towlower(value); });
+  return name == L"dcs.exe" || name == L"dcs-mt.exe";
+}
+
+std::wstring configuredLogPath() {
+  wchar_t directory[32768]{};
+  DWORD bytes = sizeof(directory);
+  const LSTATUS status = RegGetValueW(
+    HKEY_CURRENT_USER,
+    L"SOFTWARE\\DCSHUB",
+    L"OpenXrLogDirectory",
+    RRF_RT_REG_SZ,
+    nullptr,
+    directory,
+    &bytes);
+  if (status != ERROR_SUCCESS || directory[0] == L'\0') return {};
+  std::wstring result(directory);
+  CreateDirectoryW(result.c_str(), nullptr);
+  if (!result.empty() && result.back() != L'\\' && result.back() != L'/') result += L'\\';
+  result += L"openxr-overlay.log";
+  return result;
+}
 
 void logLine(const char* message) {
-  char localAppData[MAX_PATH]{};
-  const DWORD length = GetEnvironmentVariableA("LOCALAPPDATA", localAppData, MAX_PATH);
-  if (length == 0 || length >= MAX_PATH) return;
-  std::string root(localAppData);
-  root += "\\DCSHUB";
-  CreateDirectoryA(root.c_str(), nullptr);
-  root += "\\Logs";
-  CreateDirectoryA(root.c_str(), nullptr);
-  root += "\\openxr-overlay.log";
+  const std::wstring logPath = configuredLogPath();
+  if (logPath.empty()) return;
   FILE* file = nullptr;
-  if (fopen_s(&file, root.c_str(), "a") != 0 || !file) return;
+  if (_wfopen_s(&file, logPath.c_str(), L"a") != 0 || !file) return;
   SYSTEMTIME time{};
   GetLocalTime(&time);
   std::fprintf(file, "%04u-%02u-%02u %02u:%02u:%02u.%03u [PID %lu] %s\n",
@@ -455,6 +480,9 @@ XRAPI_ATTR XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEnd
 
 XRAPI_ATTR XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function) {
   if (!name || !function) return XR_ERROR_VALIDATION_FAILURE;
+  if (!gOverlayEnabled) {
+    return gDispatch.getInstanceProcAddr ? gDispatch.getInstanceProcAddr(instance, name, function) : XR_ERROR_FUNCTION_UNSUPPORTED;
+  }
   if (std::string_view(name) == "xrGetInstanceProcAddr") *function = reinterpret_cast<PFN_xrVoidFunction>(layerGetInstanceProcAddr);
   else if (std::string_view(name) == "xrDestroyInstance") *function = reinterpret_cast<PFN_xrVoidFunction>(layerDestroyInstance);
   else if (std::string_view(name) == "xrCreateSession") *function = reinterpret_cast<PFN_xrVoidFunction>(layerCreateSession);
@@ -482,6 +510,8 @@ XRAPI_ATTR XrResult XRAPI_CALL layerCreateApiLayerInstance(
   if (XR_FAILED(result)) return result;
   std::scoped_lock lock(gMutex);
   gInstance = *instance;
+  gOverlayEnabled = isDcsProcess();
+  if (!gOverlayEnabled) return result;
   if (!populateDispatch(gInstance)) return XR_ERROR_INITIALIZATION_FAILED;
   logLine("OpenXR API layer attached to application instance");
   return result;
@@ -572,6 +602,7 @@ XRAPI_ATTR XrResult XRAPI_CALL layerDestroyInstance(XrInstance instance) {
   gSessions.clear();
   const auto destroy = gDispatch.destroyInstance;
   gInstance = XR_NULL_HANDLE;
+  gOverlayEnabled = false;
   return destroy ? destroy(instance) : XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 
@@ -612,19 +643,16 @@ extern "C" LAYER_EXPORT XRAPI_ATTR XrResult XRAPI_CALL xrNegotiateLoaderApiLayer
   const XrNegotiateLoaderInfo* loaderInfo,
   const char*,
   XrNegotiateApiLayerRequest* request) {
-  logLine("OpenXR loader requested DCSHUB API layer negotiation");
   if (!loaderInfo || !request ||
       loaderInfo->structType != XR_LOADER_INTERFACE_STRUCT_LOADER_INFO ||
       request->structType != XR_LOADER_INTERFACE_STRUCT_API_LAYER_REQUEST ||
       loaderInfo->minInterfaceVersion > XR_CURRENT_LOADER_API_LAYER_VERSION ||
       loaderInfo->maxInterfaceVersion < XR_CURRENT_LOADER_API_LAYER_VERSION) {
-    logLine("OpenXR API layer negotiation validation failed");
     return XR_ERROR_INITIALIZATION_FAILED;
   }
   request->layerInterfaceVersion = XR_CURRENT_LOADER_API_LAYER_VERSION;
   request->layerApiVersion = std::min(loaderInfo->maxApiVersion, XR_CURRENT_API_VERSION);
   request->getInstanceProcAddr = layerGetInstanceProcAddr;
   request->createApiLayerInstance = layerCreateApiLayerInstance;
-  logLine("OpenXR API layer negotiation succeeded");
   return XR_SUCCESS;
 }

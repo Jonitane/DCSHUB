@@ -67,10 +67,27 @@ export default function GenericModulePage({ moduleId }: { moduleId: ModuleId }) 
   const [logs, setLogs] = useState<ModuleLogEntry[]>([])
   const [actionStates, setActionStates] = useState<Record<string, boolean>>({})
   const [operatingActionId, setOperatingActionId] = useState<string | null>(null)
+  const [silentLaunch, setSilentLaunch] = useState<boolean | null>(null)
+  const [silentLaunchBusy, setSilentLaunchBusy] = useState(false)
   const settingsDirtyRef = useRef(false)
   const busyRef = useRef(false)
 
   useEffect(() => { busyRef.current = busy }, [busy])
+
+  useEffect(() => {
+    let cancelled = false
+    const refreshSilentLaunch = () => {
+      void window.electronAPI?.softwareCatalog.overview().then((overview) => {
+        if (!cancelled) setSilentLaunch(overview.items.find((item) => item.id === moduleId)?.silentLaunch ?? null)
+      }).catch(() => undefined)
+    }
+    refreshSilentLaunch()
+    window.addEventListener('focus', refreshSilentLaunch)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', refreshSilentLaunch)
+    }
+  }, [moduleId])
 
   useEffect(() => {
     if (!manifest?.capabilities.settings) return
@@ -214,6 +231,18 @@ export default function GenericModulePage({ moduleId }: { moduleId: ModuleId }) 
     }
   }
 
+  const toggleSilentLaunch = async (checked: boolean) => {
+    setSilentLaunchBusy(true)
+    try {
+      const overview = await window.electronAPI?.softwareCatalog.setSilentLaunch(moduleId, checked)
+      setSilentLaunch(overview?.items.find((item) => item.id === moduleId)?.silentLaunch ?? checked)
+    } catch (reason) {
+      toast.error('静默启动设置失败', { description: reason instanceof Error ? reason.message : String(reason) })
+    } finally {
+      setSilentLaunchBusy(false)
+    }
+  }
+
   const lifecycleCard = manifest.ui?.lifecycleCard
   const settingsCard = manifest.ui?.settingsCard
   const lifecycleBackground = lifecycleCard?.backgroundImage || manifest.backgroundImage
@@ -226,7 +255,10 @@ export default function GenericModulePage({ moduleId }: { moduleId: ModuleId }) 
         <CardHeader className="relative z-10 min-h-40 justify-center pt-12">
           <Badge variant="outline" className={`absolute left-6 top-5 ${runState.badgeClassName} backdrop-blur-sm`}>{runState.label}</Badge>
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <CardTitle className="text-base">{lifecycleCard?.title || manifest.displayName}</CardTitle>
+            <div className="min-w-0">
+              <CardTitle className="text-base">{lifecycleCard?.title || manifest.displayName}</CardTitle>
+              {silentLaunch !== null && <div className="mt-2 flex w-fit items-center gap-2 rounded-lg border border-border/45 bg-background/60 px-2.5 py-1.5 text-[11px] text-muted-foreground backdrop-blur-sm"><span>静默启动</span><Switch className="scale-75" aria-label={`${manifest.displayName} 静默启动`} checked={silentLaunch} disabled={silentLaunchBusy} onCheckedChange={(checked) => void toggleSilentLaunch(checked)} /></div>}
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               {manifest.capabilities.showWindow && <Button size="sm" variant="outline" disabled={busy} onClick={() => void operate('show')} className="gap-1.5 bg-background/65 backdrop-blur-sm"><ExternalLink className="size-3.5" />打开窗口</Button>}
               {manifest.capabilities.lifecycle && <Button size="sm" disabled={busy} onClick={() => void operate(shouldStop ? 'stop' : 'start')} className="gap-1.5 shadow-lg">{busy ? <Activity className="size-3.5 animate-spin" /> : shouldStop ? <Square className="size-3.5" /> : <Play className="size-3.5" />}{lifecycleLabel}</Button>}

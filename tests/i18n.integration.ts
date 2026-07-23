@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
-import { normalizeLanguage, translateStaticText } from '../src/lib/i18n-core'
+import { normalizeLanguage, translateMessage, translateStaticText } from '../src/lib/i18n-core'
 
 assert.equal(normalizeLanguage(null), 'zh-CN')
 assert.equal(normalizeLanguage('zh-CN'), 'zh-CN')
 assert.equal(normalizeLanguage('en-US'), 'en-US')
 assert.equal(normalizeLanguage('fr-FR'), 'zh-CN')
+
+assert.equal(translateMessage('nav.dashboard', 'zh-CN'), '仪表板')
+assert.equal(translateMessage('nav.dashboard', 'en-US'), 'Dashboard')
+assert.equal(translateMessage('software.added', 'en-US', { name: 'VoxBind' }), 'VoxBind added')
 
 assert.equal(translateStaticText('仪表板', 'zh-CN'), '仪表板')
 assert.equal(translateStaticText('仪表板', 'en-US'), 'Dashboard')

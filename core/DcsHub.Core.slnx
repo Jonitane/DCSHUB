@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="DcsHub.Core/DcsHub.Core.csproj" />
+  <Project Path="DcsHub.Windows/DcsHub.Windows.csproj" />
+  <Project Path="DcsHub.Core.Host/DcsHub.Core.Host.csproj" />
+  <Project Path="DcsHub.Core.Tests/DcsHub.Core.Tests.csproj" />
+</Solution>

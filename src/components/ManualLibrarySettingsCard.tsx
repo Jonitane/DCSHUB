@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BookCopy, BookOpenText, ChevronDown, CircleAlert, Download, FolderOpen, Gamepad2, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, Trash2, Check, Keyboard, X } from 'lucide-react'
+import { Bot, BookCopy, BookOpenText, ChevronDown, CircleAlert, Download, FolderOpen, Gamepad2, LoaderCircle, Trash2, Check, Keyboard, Mic, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import type { ChuckGuideCatalogItem, ManualLibraryOverview, ManualLibraryProgress } from '@/shared/manual-library-contracts'
-import type { OverlaySettings, VrOverlayStatus } from '@/shared/window-contracts'
+import type { OverlaySettings, SpeechInputDevice, SpeechModelStatus, VrOverlayStatus } from '@/shared/window-contracts'
+import ManualAiSettingsPanel from '@/components/manual/ManualAiSettingsPanel'
 
 function keyEventToAccelerator(e: KeyboardEvent): string | null {
   const parts: string[] = []
@@ -72,6 +71,8 @@ function keyEventToAccelerator(e: KeyboardEvent): string | null {
 }
 
 function formatHotkeyForDisplay(accelerator: string): string {
+  const joystick = /^JOY:(\d+):BUTTON:(\d+)$/i.exec(accelerator)
+  if (joystick) return `外设 ${Number(joystick[1]) + 1} · 按钮 ${Number(joystick[2]) + 1}`
   return accelerator
     .replace(/num([0-9])/gi, 'Num $1')
     .replace(/numadd/gi, 'Num +')
@@ -110,6 +111,27 @@ function HotkeyRecorder({
 
   useEffect(() => {
     if (!recording) return
+    let frame = 0
+    const initialButtons = new Set<string>()
+    for (const gamepad of navigator.getGamepads?.() || []) {
+      gamepad?.buttons.forEach((button, index) => { if (button.pressed) initialButtons.add(`${gamepad.index}:${index}`) })
+    }
+    const pollGamepads = () => {
+      for (const gamepad of navigator.getGamepads?.() || []) {
+        if (!gamepad) continue
+        const buttonIndex = gamepad.buttons.findIndex((button, index) => button.pressed && !initialButtons.has(`${gamepad.index}:${index}`))
+        if (buttonIndex < 0) continue
+        setRecording(false)
+        setSaving(true)
+        overlay?.setHotkey(`JOY:${gamepad.index}:BUTTON:${buttonIndex}`)
+          .then((next) => { setSettings(next); onChange(next); toast.success('外设呼出按键已更新') })
+          .catch((reason) => toast.error('外设按键设置失败', { description: reason instanceof Error ? reason.message : String(reason) }))
+          .finally(() => setSaving(false))
+        return
+      }
+      frame = requestAnimationFrame(pollGamepads)
+    }
+    frame = requestAnimationFrame(pollGamepads)
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
         e.preventDefault()
@@ -142,13 +164,14 @@ function HotkeyRecorder({
     window.addEventListener('keydown', handler, true)
     window.addEventListener('blur', blurHandler)
     return () => {
+      cancelAnimationFrame(frame)
       window.removeEventListener('keydown', handler, true)
       window.removeEventListener('blur', blurHandler)
     }
   }, [onChange, recording, overlay])
 
-  const currentHotkey = settings?.hotkey || 'F9'
-  const defaultHotkey = 'F9'
+  const currentHotkey = settings?.hotkey || 'Ctrl+Alt+M'
+  const defaultHotkey = 'Ctrl+Alt+M'
   const disabled = !settings?.enabled
 
   return (
@@ -158,7 +181,7 @@ function HotkeyRecorder({
         呼出/隐藏浮窗
       </div>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
-        DCS 运行时按一次呼出、再按一次隐藏；每次呼出都会把 VR 浮窗重新放到当前头部朝向的正前方。支持组合键（如 Ctrl+Alt+K）。
+        短按呼出或隐藏；长按开始语音输入，松开后自动提问。支持键盘组合键和可被 Windows Game Controller 识别的外设按钮。
       </p>
       <div className="mt-3 flex items-center gap-3">
         <button
@@ -225,11 +248,15 @@ export default function ManualLibrarySettingsCard() {
   const [chuckDropdownOpen, setChuckDropdownOpen] = useState(false)
   const [operation, setOperation] = useState<string | null>(null)
   const [progress, setProgress] = useState<ManualLibraryProgress | null>(null)
-  const [apiKey, setApiKey] = useState('')
   const [duplicateCleanupOpen, setDuplicateCleanupOpen] = useState(false)
   const [removableDuplicates, setRemovableDuplicates] = useState(0)
   const [overlaySettings, setOverlaySettings] = useState<OverlaySettings | null>(null)
   const [vrOverlayStatus, setVrOverlayStatus] = useState<VrOverlayStatus | null>(null)
+  const [microphones, setMicrophones] = useState<SpeechInputDevice[]>([])
+  const [speechModel, setSpeechModel] = useState<SpeechModelStatus | null>(null)
+  const [manualSourcesOpen, setManualSourcesOpen] = useState(false)
+  const [overlayOptionsOpen, setOverlayOptionsOpen] = useState(false)
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false)
 
   const refresh = useCallback(async () => {
     if (!bridge) return
@@ -247,6 +274,13 @@ export default function ManualLibrarySettingsCard() {
   }, [overlay])
   useEffect(() => {
     if (!overlay) return
+    void Promise.all([overlay.listMicrophones(), overlay.speechModelStatus()])
+      .then(([devices, model]) => { setMicrophones(devices); setSpeechModel(model) })
+      .catch(() => undefined)
+    return overlay.onSpeechModelProgress(setSpeechModel)
+  }, [overlay])
+  useEffect(() => {
+    if (!overlay) return
     void overlay.getDisplayMode().then(setVrOverlayStatus).catch(() => undefined)
     return overlay.onDisplayModeChanged(setVrOverlayStatus)
   }, [overlay])
@@ -256,6 +290,22 @@ export default function ManualLibrarySettingsCard() {
     overlay.setEnabled(checked)
       .then((next) => setOverlaySettings(next))
       .catch((r) => toast.error('设置失败', { description: r instanceof Error ? r.message : String(r) }))
+  }
+
+  const setMicrophone = (microphoneId: string) => {
+    if (!overlay) return
+    overlay.setMicrophone(microphoneId || null)
+      .then(setOverlaySettings)
+      .catch((reason) => toast.error('麦克风设置失败', { description: reason instanceof Error ? reason.message : String(reason) }))
+  }
+
+  const downloadSpeechModel = () => {
+    if (!overlay) return
+    setOperation('sensevoice-download')
+    overlay.downloadSpeechModel()
+      .then((status) => { setSpeechModel(status); toast.success('SenseVoice 语音模型已就绪') })
+      .catch((reason) => toast.error('语音模型下载失败', { description: reason instanceof Error ? reason.message : String(reason) }))
+      .finally(() => setOperation(null))
   }
 
   const chuckDropdownRef = useRef<HTMLDivElement>(null)
@@ -317,15 +367,6 @@ export default function ManualLibrarySettingsCard() {
     await refresh()
   })
 
-  const saveApi = () => run('api-save', async () => {
-    const next = await bridge!.configureDeepSeek(apiKey)
-    setOverview(next)
-    setApiKey('')
-    toast.success('DeepSeek 已连接，API Key 已加密保存')
-  })
-
-  const testApi = () => run('api-test', async () => { toast.success((await bridge!.testDeepSeek()).message) })
-  const clearApi = () => run('api-clear', async () => { setOverview(await bridge!.clearDeepSeek()); toast.success('DeepSeek API Key 已清除') })
   const removeDuplicates = () => run('deduplicate', async () => {
     const result = await bridge!.removeDuplicateDcsManuals()
     if (result.overview) setOverview(result.overview)
@@ -337,110 +378,59 @@ export default function ManualLibrarySettingsCard() {
   const installedCount = catalog.filter((guide) => guide.installed).length
 
   return (
-    <Card className="overflow-hidden border-border/45 bg-card/75">
-      <button type="button" className="flex w-full items-center gap-3.5 p-5 text-left transition-colors hover:bg-accent/15" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
+    <Card className="overflow-hidden border-border/50 bg-card/78 shadow-[0_12px_32px_hsl(var(--background)/0.2)]">
+      <button type="button" className={`flex w-full items-center gap-3.5 border-b border-transparent bg-background/70 p-5 text-left transition-colors hover:bg-background/85 ${open ? 'border-border/45 bg-background/85' : ''}`} onClick={() => setOpen((current) => !current)} aria-expanded={open}>
         <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20"><BookOpenText className="size-5 text-primary" /></div>
-        <div className="min-w-0 flex-1"><p className="text-sm font-semibold">超级手册</p><p className="mt-1 text-xs text-muted-foreground">手册目录、问答热键与 DeepSeek API</p></div>
+        <div className="min-w-0 flex-1"><p className="text-base font-bold tracking-wide">超级手册</p><p className="mt-1 text-xs text-muted-foreground">目录概览与按需展开的功能设置</p></div>
         <ChevronDown className={`size-4 text-muted-foreground transition-transform ${open ? 'rotate-180 text-primary' : ''}`} />
       </button>
-      {open && <CardContent className="space-y-4 border-t border-border/35 p-5">
+      {open && <CardContent className="space-y-3 bg-card/35 p-5">
         {progress && busy && <ProgressLine progress={progress} />}
-        <div className="flex min-w-0 items-center gap-3 rounded-xl border border-border/35 bg-background/45 p-3"><FolderOpen className="size-4 shrink-0 text-primary" /><div className="min-w-0 flex-1"><p className="text-xs font-medium">手册库目录</p><p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={overview?.libraryPath || undefined}>{overview?.libraryPath || '尚未设置'}</p></div><Button size="sm" variant="outline" onClick={() => void chooseLibrary()} disabled={busy}>{operation === 'directory' ? <LoaderCircle className="size-3.5 animate-spin" /> : <FolderOpen className="size-3.5" />}选择目录</Button></div>
+        <div className="flex min-w-0 items-center gap-3 rounded-xl border border-border/40 bg-background/45 p-3.5"><div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-primary/[0.08]"><FolderOpen className="size-4 text-primary" /></div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-sm font-semibold">手册库目录</p>{overview?.configured && <span className="rounded-md border border-emerald-400/20 bg-emerald-500/[0.06] px-1.5 py-0.5 text-[9px] text-emerald-300">已配置</span>}</div><p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={overview?.libraryPath || undefined}>{overview?.libraryPath || '尚未设置'}</p></div><Button size="sm" variant="outline" onClick={() => void chooseLibrary()} disabled={busy}>{operation === 'directory' ? <LoaderCircle className="size-3.5 animate-spin" /> : <FolderOpen className="size-3.5" />}选择目录</Button></div>
 
-        <div className="grid gap-3 xl:grid-cols-2">
-          <div className="rounded-xl border border-border/35 bg-background/45 p-4"><div className="flex items-center gap-2 text-sm font-semibold"><BookCopy className="size-4 text-primary" />DCS 官方英文手册</div><p className="mt-2 text-xs leading-5 text-muted-foreground">只复制英文版；官方索引仅在此处更新，不受用户手册刷新影响。</p><Button className="mt-4 w-full" size="sm" variant="outline" onClick={() => void importDcs()} disabled={busy || !overview?.configured}>{operation === 'dcs' ? <LoaderCircle className="size-3.5 animate-spin" /> : <BookCopy className="size-3.5" />}复制或更新英文手册</Button></div>
-          <div className="rounded-xl border border-border/35 bg-background/45 p-4">
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-2 text-sm font-semibold"><Download className="size-4 text-primary" />Chuck's Guides</span>
-              <span className="text-[10px] text-muted-foreground">{installedCount}/{catalog.length} 已入库</span>
-            </div>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">点击选择多个机型批量下载；Chuck讲解最全面，问答优先级更高。</p>
-            <div className="mt-3 flex items-start gap-2">
-              <div className="relative flex-1" ref={chuckDropdownRef}>
-                <button
-                  type="button"
-                  onClick={() => setChuckDropdownOpen(!chuckDropdownOpen)}
-                  disabled={busy}
-                  className="flex h-10 w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <span className={`min-w-0 flex-1 truncate text-left ${selectedGuides.size === 0 ? 'text-muted-foreground' : ''}`}>
-                    {selectedGuides.size === 0
-                      ? '选择机型'
-                      : selectedGuides.size === 1
-                        ? catalog.find((g) => g.id === Array.from(selectedGuides)[0])?.displayName || '已选 1 项'
-                        : `已选 ${selectedGuides.size} 个机型`}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    {selectedGuides.size > 0 && (
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => { e.stopPropagation(); clearSelection() }}
-                        className="flex size-4 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
-                      >
-                        <X className="size-3" />
-                      </span>
-                    )}
-                    <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform duration-200 ${chuckDropdownOpen ? 'rotate-180 text-primary' : ''}`} />
-                  </div>
-                </button>
-                {chuckDropdownOpen && (
-                  <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-[320px] overflow-hidden rounded-xl border bg-popover shadow-xl outline-none">
-                    <div className="flex items-center gap-1 border-b p-1.5">
-                      <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={(e) => { e.stopPropagation(); selectAllMissing() }} disabled={busy}>
-                        全选未下载
-                      </Button>
-                      <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={(e) => { e.stopPropagation(); clearSelection() }} disabled={busy || selectedGuides.size === 0}>
-                        清空选择
-                      </Button>
-                    </div>
-                    <div className="max-h-[260px] overflow-y-auto p-1">
-                      {catalog.map((guide) => (
-                        <label
-                          key={guide.id}
-                          className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent/20 ${guide.installed ? 'opacity-50' : ''}`}
-                          onClick={(e) => e.preventDefault()}
-                        >
-                          <Checkbox
-                            checked={selectedGuides.has(guide.id)}
-                            onCheckedChange={() => !guide.installed && toggleGuide(guide.id)}
-                            disabled={busy || guide.installed}
-                            className="size-4"
-                          />
-                          <span className="flex-1 select-none">{guide.displayName}</span>
-                          {guide.installed && <Check className="size-3.5 text-emerald-400" aria-label="已入库" />}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
+        <section className="overflow-visible rounded-xl border border-border/40 bg-background/30">
+          <button type="button" className="flex w-full items-center gap-3 rounded-xl bg-background/65 p-3.5 text-left transition-colors hover:bg-background/80" onClick={() => setManualSourcesOpen((current) => !current)} aria-expanded={manualSourcesOpen}>
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-primary/[0.08]"><BookCopy className="size-4 text-primary" /></div>
+            <div className="min-w-0 flex-1"><p className="text-sm font-semibold">手册来源</p><p className="mt-0.5 text-[10px] text-muted-foreground">DCS 官方英文手册 · Chuck's Guides</p></div>
+            <span className="rounded-md border border-border/35 bg-card/45 px-2 py-1 text-[10px] text-muted-foreground">Chuck {installedCount}/{catalog.length}</span>
+            <ChevronDown className={`size-4 text-muted-foreground transition-transform ${manualSourcesOpen ? 'rotate-180 text-primary' : ''}`} />
+          </button>
+          {manualSourcesOpen && <div className="grid gap-3 border-t border-border/35 p-3.5 xl:grid-cols-2">
+            <div className="rounded-lg border border-border/35 bg-background/40 p-3.5"><div className="flex items-center gap-2 text-xs font-semibold"><BookCopy className="size-3.5 text-primary" />DCS 官方英文手册</div><p className="mt-2 text-[11px] leading-5 text-muted-foreground">仅复制英文版，并单独维护官方索引。</p><Button className="mt-3 w-full" size="sm" variant="outline" onClick={() => void importDcs()} disabled={busy || !overview?.configured}>{operation === 'dcs' ? <LoaderCircle className="size-3.5 animate-spin" /> : <BookCopy className="size-3.5" />}复制或更新</Button></div>
+            <div className="rounded-lg border border-border/35 bg-background/40 p-3.5">
+              <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-xs font-semibold"><Download className="size-3.5 text-primary" />Chuck's Guides</span><span className="text-[10px] text-muted-foreground">{installedCount}/{catalog.length} 已入库</span></div>
+              <p className="mt-2 text-[11px] leading-5 text-muted-foreground">选择一个或多个机型后批量下载。</p>
+              <div className="mt-3 flex items-start gap-2">
+                <div className="relative min-w-0 flex-1" ref={chuckDropdownRef}>
+                  <button type="button" onClick={() => setChuckDropdownOpen(!chuckDropdownOpen)} disabled={busy} className="flex h-9 w-full items-center justify-between rounded-lg border border-input bg-background px-3 text-xs focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+                    <span className={`min-w-0 flex-1 truncate text-left ${selectedGuides.size === 0 ? 'text-muted-foreground' : ''}`}>{selectedGuides.size === 0 ? '选择机型' : selectedGuides.size === 1 ? catalog.find((g) => g.id === Array.from(selectedGuides)[0])?.displayName || '已选 1 项' : `已选 ${selectedGuides.size} 个机型`}</span>
+                    <div className="flex items-center gap-1">{selectedGuides.size > 0 && <span role="button" tabIndex={0} onClick={(event) => { event.stopPropagation(); clearSelection() }} className="flex size-4 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"><X className="size-3" /></span>}<ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${chuckDropdownOpen ? 'rotate-180 text-primary' : ''}`} /></div>
+                  </button>
+                  {chuckDropdownOpen && <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-[320px] overflow-hidden rounded-xl border bg-popover shadow-xl"><div className="flex items-center gap-1 border-b p-1.5"><Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={(event) => { event.stopPropagation(); selectAllMissing() }} disabled={busy}>全选未下载</Button><Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={(event) => { event.stopPropagation(); clearSelection() }} disabled={busy || selectedGuides.size === 0}>清空选择</Button></div><div className="max-h-[260px] overflow-y-auto p-1">{catalog.map((guide) => <label key={guide.id} className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent/20 ${guide.installed ? 'opacity-50' : ''}`} onClick={(event) => event.preventDefault()}><Checkbox checked={selectedGuides.has(guide.id)} onCheckedChange={() => !guide.installed && toggleGuide(guide.id)} disabled={busy || guide.installed} className="size-4" /><span className="flex-1 select-none">{guide.displayName}</span>{guide.installed && <Check className="size-3.5 text-emerald-400" aria-label="已入库" />}</label>)}</div></div>}
+                </div>
+                <Button size="sm" variant="outline" className="h-9 shrink-0" onClick={() => void downloadSelected()} disabled={selectedGuides.size === 0 || busy || !overview?.configured}>{operation === 'chuck-selected' ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}下载{selectedGuides.size > 0 && ` (${selectedGuides.size})`}</Button>
               </div>
-              <Button size="sm" variant="outline" className="shrink-0" onClick={() => void downloadSelected()} disabled={selectedGuides.size === 0 || busy || !overview?.configured}>
-                {operation === 'chuck-selected' ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-                下载{selectedGuides.size > 0 && ` (${selectedGuides.size})`}
-              </Button>
             </div>
-          </div>
-        </div>
+          </div>}
+        </section>
 
-        <div className="rounded-xl border border-border/35 bg-background/45 p-4">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-sm font-semibold"><Gamepad2 className="size-4 text-primary" />内置手册窗口</div>
-            <Switch checked={overlaySettings?.enabled ?? true} onCheckedChange={toggleOverlayEnabled} />
+        <section className="overflow-hidden rounded-xl border border-border/40 bg-background/30">
+          <div className="flex items-center gap-3 bg-background/65 p-3.5">
+            <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => setOverlayOptionsOpen((current) => !current)} aria-expanded={overlayOptionsOpen}><div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-primary/[0.08]"><Gamepad2 className="size-4 text-primary" /></div><div className="min-w-0 flex-1"><p className="text-sm font-semibold">内置手册窗口</p><p className="mt-0.5 text-[10px] text-muted-foreground">{overlaySettings?.enabled === false ? '已关闭' : `已开启 · ${formatHotkeyForDisplay(overlaySettings?.hotkey || 'Ctrl+Alt+M')} · ${vrOverlayStatus?.mode === 'vr' ? 'VR / OpenXR' : '桌面'}`}</p></div><ChevronDown className={`size-4 text-muted-foreground transition-transform ${overlayOptionsOpen ? 'rotate-180 text-primary' : ''}`} /></button>
+            <Switch aria-label="启用内置手册窗口" checked={overlaySettings?.enabled ?? true} onCheckedChange={toggleOverlayEnabled} />
           </div>
-          <p className="mt-2 text-xs leading-5 text-muted-foreground">开启后可在 DCS 中使用快捷键呼出或隐藏超级手册。浮窗会自动跟随仪表板的桌面/VR 启动模式。</p>
-          {vrOverlayStatus && <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground"><span className={`size-1.5 rounded-full ${vrOverlayStatus.mode === 'vr' && vrOverlayStatus.available && !vrOverlayStatus.error ? 'bg-emerald-400' : 'bg-muted-foreground/50'}`} /><span>当前跟随：{vrOverlayStatus.mode === 'vr' ? 'VR / OpenXR' : '桌面'}</span>{vrOverlayStatus.mode === 'vr' && (!vrOverlayStatus.available || vrOverlayStatus.error) && <span className="text-amber-400">VR 组件不可用</span>}</div>}
-          <div className="mt-4">
-            <div className="rounded-lg border border-border/30 bg-background/30 p-3">
-              <HotkeyRecorder settings={overlaySettings} onChange={setOverlaySettings} />
-            </div>
-          </div>
-          <div className="mt-3 rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2.5 text-[11px] leading-5 text-muted-foreground">
-            <span className="font-semibold text-foreground">VR 操作：</span>按呼出键时，浮窗始终出现在当前头部朝向的正前方，并自动消除歪头造成的画布侧倾；显示后会固定在空间中，拖动顶部标题栏可让面板围绕呼出位置做弧形移动。再次隐藏并呼出即可按新的视线方向重新定位。
-          </div>
-        </div>
+          {overlayOptionsOpen && <div className="space-y-3 border-t border-border/35 p-3.5"><div className="rounded-lg border border-border/30 bg-background/35 p-3"><HotkeyRecorder settings={overlaySettings} onChange={setOverlaySettings} /></div><div className="rounded-lg border border-border/30 bg-background/35 p-3"><div className="flex items-center gap-2 text-sm font-semibold"><Mic className="size-4 text-primary" />语音输入</div><div className="mt-3 flex flex-wrap items-center gap-2"><select value={overlaySettings?.microphoneId || microphones.find((device) => device.isDefault)?.id || ''} onChange={(event) => setMicrophone(event.target.value)} className="h-9 min-w-56 flex-1 rounded-lg border border-input bg-background px-3 text-xs outline-none focus:ring-2 focus:ring-ring"><option value="">系统默认麦克风</option>{microphones.map((device) => <option key={device.id} value={device.id}>{device.name}{device.isDefault ? '（默认）' : ''}</option>)}</select>{speechModel?.installed ? <span className="rounded-md border border-emerald-400/25 bg-emerald-500/8 px-2.5 py-2 text-[11px] text-emerald-300">SenseVoice 已就绪</span> : <Button size="sm" variant="outline" onClick={downloadSpeechModel} disabled={speechModel?.downloading || operation === 'sensevoice-download'}>{speechModel?.downloading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}下载语音模型{speechModel?.downloading ? ` ${speechModel.progress}%` : ''}</Button>}</div>{speechModel?.error && <p className="mt-2 text-[11px] text-destructive">{speechModel.error}</p>}<p className="mt-2 text-[11px] leading-5 text-muted-foreground">短按呼出键控制窗口；长按说话，松开后由 SenseVoice 在本地转写并直接提问。转写会自动校正常见 DCS 机型、武器和航电术语。</p></div>{vrOverlayStatus && <div className="flex items-center gap-2 text-[11px] text-muted-foreground"><span className={`size-1.5 rounded-full ${vrOverlayStatus.mode === 'vr' && vrOverlayStatus.available && !vrOverlayStatus.error ? 'bg-emerald-400' : 'bg-muted-foreground/50'}`} /><span>当前跟随：{vrOverlayStatus.mode === 'vr' ? 'VR / OpenXR' : '桌面'}</span>{vrOverlayStatus.mode === 'vr' && (!vrOverlayStatus.available || vrOverlayStatus.error) && <span className="text-amber-400">VR 组件不可用</span>}</div>}<div className="rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2.5 text-[11px] leading-5 text-muted-foreground"><span className="font-semibold text-foreground">VR 操作：</span>呼出时面板会出现在当前视线正前方并保持空间固定；拖动标题栏可环绕移动，再次呼出会按新的视线方向定位。</div></div>}
+        </section>
 
-        <div className="rounded-xl border border-border/35 bg-background/45 p-4"><div className="mb-3 flex items-center gap-2 text-sm font-semibold"><KeyRound className="size-4 text-primary" />DeepSeek API</div>{overview?.deepSeek.configured ? <div className="flex flex-wrap items-center gap-3"><div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/7 p-3"><ShieldCheck className="size-4 text-emerald-400" /><div><p className="text-xs font-medium">API Key 已安全保存</p><p className="mt-1 text-[10px] text-muted-foreground">手册问答：V4 Flash · 在线搜索：V4 Pro MAX</p></div></div><Button size="sm" variant="outline" onClick={() => void testApi()} disabled={busy}>{operation === 'api-test' ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}测试</Button><Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => void clearApi()} disabled={busy}><Trash2 className="size-3.5" />重新配置</Button></div> : <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]"><div className="space-y-1.5"><Label htmlFor="settings-deepseek-key">API Key</Label><Input id="settings-deepseek-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-…" /></div><Button className="self-end" onClick={() => void saveApi()} disabled={busy || apiKey.trim().length < 10}>{operation === 'api-save' ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}测试并保存</Button></div>}<p className="mt-3 text-[10px] leading-5 text-muted-foreground">普通手册问答固定使用 V4 Flash 无思考模式；用户主动点击“在线搜索”时才使用 V4 Pro MAX。密钥使用 Windows 当前用户凭据加密保存。</p></div>
+        <section className="overflow-hidden rounded-xl border border-border/40 bg-background/30">
+          <button type="button" className="flex w-full items-center gap-3 bg-background/65 p-3.5 text-left transition-colors hover:bg-background/80" onClick={() => setAiSettingsOpen((current) => !current)} aria-expanded={aiSettingsOpen}>
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-primary/[0.08]"><Bot className="size-4 text-primary" /></div>
+            <div className="min-w-0 flex-1"><p className="text-sm font-semibold">AI 问答服务</p><p className="mt-0.5 truncate text-[10px] text-muted-foreground">{overview?.ai.configured ? `${overview.ai.providers.find((provider) => provider.id === overview.ai.local.provider)?.name || overview.ai.local.provider} · 本地与联网模型配置` : '尚未配置 API 供应商'}</p></div>
+            <span className={`size-1.5 rounded-full ${overview?.ai.configured ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+            <ChevronDown className={`size-4 text-muted-foreground transition-transform ${aiSettingsOpen ? 'rotate-180 text-primary' : ''}`} />
+          </button>
+          {aiSettingsOpen && <div className="border-t border-border/35 p-3.5"><ManualAiSettingsPanel overview={overview} onOverviewChange={setOverview} /></div>}
+        </section>
       </CardContent>}
 
       <Dialog open={duplicateCleanupOpen} onOpenChange={(next) => { if (!busy) setDuplicateCleanupOpen(next) }}><DialogContent><DialogHeader><DialogTitle className="flex items-center gap-2"><CircleAlert className="size-5 text-amber-400" />发现重复官方手册</DialogTitle><DialogDescription>有 {removableDuplicates} 份手册同时存在于用户目录和 DCSHUB 管理的“DCS Manuals”目录。是否移除后者？用户自己放入的手册不会被删除。</DialogDescription></DialogHeader><DialogFooter className="mt-6 gap-2"><Button variant="outline" onClick={() => setDuplicateCleanupOpen(false)} disabled={busy}>保留</Button><Button variant="destructive" onClick={() => void removeDuplicates()} disabled={busy}>{operation === 'deduplicate' ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}移除重复副本</Button></DialogFooter></DialogContent></Dialog>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -13,67 +13,24 @@ import {
   GripVertical,
   Globe,
   ExternalLink,
+  Scaling,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
+import { ManualAnswerMarkdown, ManualImageLightbox, manualPreviewSources, useManualAnswerNavigation } from '@/components/manual/ManualAnswerRenderer'
 import type {
   ManualLibraryOverview,
   ManualPagePreview,
   ManualQuestionAnswer,
   ManualOnlineSearchAnswer,
 } from '@/shared/manual-library-contracts'
-import type { OverlayDisplayMode, OverlaySettings } from '@/shared/window-contracts'
+import type { OverlayDisplayMode, OverlaySettings, SpeechRecognitionState } from '@/shared/window-contracts'
 
 function formatOverlayHotkey(hotkey: string): string {
   return hotkey.replace(/^num([0-9])$/i, 'Num $1')
 }
 
-function processTextWithCitations(
-  text: string,
-  sourcePreviews: Array<ManualPagePreview | undefined>,
-  activeSource: number | null,
-  onCitationClick: (sourceNumber: number) => void,
-  onCitationHover: (sourceNumber: number) => void,
-): React.ReactNode[] {
-  const parts: React.ReactNode[] = []
-  const regex = /\[S(\d+)\]/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-  let key = 0
-
-  while ((match = regex.exec(text)) !== null) {
-    const sourceNumber = Number(match[1])
-    const validSource = sourceNumber >= 1 && sourceNumber <= sourcePreviews.length
-
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index))
-    }
-
-    parts.push(
-      <button
-        key={`cite-${key++}`}
-        type="button"
-        onClick={() => validSource && onCitationClick(sourceNumber)}
-        onMouseEnter={() => validSource && onCitationHover(sourceNumber)}
-        className={cn(
-          'mx-0.5 inline-flex items-center rounded px-1 py-0 text-[0.7em] font-bold transition-all cursor-pointer align-baseline ring-1',
-          activeSource === sourceNumber
-            ? 'bg-primary text-primary-foreground ring-primary shadow-sm scale-105'
-            : 'bg-amber-400/20 text-amber-300 ring-amber-400/40 hover:bg-amber-400/30 hover:scale-105'
-        )}
-      >
-        S{sourceNumber}
-      </button>
-    )
-
-    lastIndex = regex.lastIndex
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex))
-  }
-
-  return parts
-}
+const VOICE_REVIEW_DELAY_MS = 1_600
 
 function OverlayAnswer({
   response,
@@ -84,125 +41,32 @@ function OverlayAnswer({
   previews: ManualPagePreview[]
   loading: boolean
 }) {
-  const answerContainerRef = useRef<HTMLDivElement>(null)
-  const previewByPage = useMemo(
-    () => new Map(previews.map((preview) => [`${preview.documentId}:${preview.page}`, preview])),
-    [previews]
-  )
-  const sourcePreviews = useMemo(
-    () => response.sources.map((source) => source.page ? previewByPage.get(`${source.documentId}:${source.page}`) : undefined),
-    [response.sources, previewByPage]
-  )
-
-  const allPreviewsWithSources = useMemo(() => {
-    const seen = new Set<string>()
-    return response.sources
-      .map((source, index) => {
-        if (!source.page) return null
-        const preview = previewByPage.get(`${source.documentId}:${source.page}`)
-        if (!preview) return null
-        const key = `${preview.documentId}:${preview.page}`
-        if (seen.has(key)) return null
-        seen.add(key)
-        return { preview, sourceNumber: index + 1 }
-      })
-      .filter((item): item is { preview: ManualPagePreview; sourceNumber: number } => Boolean(item))
-  }, [response.sources, previewByPage])
-
-  const [currentPreviewIndex, setCurrentPreviewIndex] = useState(0)
-  const [activeCitation, setActiveCitation] = useState<number | null>(null)
+  const {
+    sourcePreviews,
+    previewItems: allPreviewsWithSources,
+    currentIndex: currentPreviewIndex,
+    setCurrentIndex: setCurrentPreviewIndex,
+    activeCitation,
+    jumpToSource,
+    previewSourceOnHover,
+  } = useManualAnswerNavigation(response, previews)
   const [expandedPreview, setExpandedPreview] = useState(false)
   const imagePanelRef = useRef<HTMLElement>(null)
   const wheelTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
-    setCurrentPreviewIndex(0)
-    setActiveCitation(null)
     setExpandedPreview(false)
   }, [response])
-
-  const jumpToSource = useCallback((sourceNumber: number) => {
-    const source = response.sources[sourceNumber - 1]
-    if (!source?.page) return
-    const previewKey = `${source.documentId}:${source.page}`
-    const index = allPreviewsWithSources.findIndex(
-      (item) => `${item.preview.documentId}:${item.preview.page}` === previewKey
-    )
-    if (index >= 0) {
-      setCurrentPreviewIndex(index)
-      setActiveCitation(sourceNumber)
-    }
-  }, [response.sources, allPreviewsWithSources])
-
-  const previewSourceOnHover = useCallback((sourceNumber: number) => {
-    const source = response.sources[sourceNumber - 1]
-    if (!source?.page) return
-    const previewKey = `${source.documentId}:${source.page}`
-    const index = allPreviewsWithSources.findIndex(
-      (item) => `${item.preview.documentId}:${item.preview.page}` === previewKey
-    )
-    if (index >= 0) {
-      setCurrentPreviewIndex(index)
-      setActiveCitation(sourceNumber)
-    }
-  }, [response.sources, allPreviewsWithSources])
-
-  const paragraphs = useMemo(() => {
-    return response.answer.split(/\n{2,}/).filter(Boolean).reduce<string[]>((blocks, block) => {
-      const previous = blocks.at(-1)
-      const listItem = /^\s*(?:[-*+]\s|\d+[.)]\s)/
-      if (previous && listItem.test(previous) && listItem.test(block)) blocks[blocks.length - 1] = `${previous}\n\n${block}`
-      else blocks.push(block)
-      return blocks
-    }, [])
-  }, [response.answer])
-
-  const createMarkdownComponents = () => {
-    const processChildren = (children: React.ReactNode): React.ReactNode => {
-      if (typeof children === 'string') {
-        return processTextWithCitations(children, sourcePreviews, activeCitation, jumpToSource, previewSourceOnHover)
-      }
-      if (Array.isArray(children)) {
-        return children.map((child, i) => {
-          if (typeof child === 'string') {
-            return <Fragment key={i}>{processTextWithCitations(child, sourcePreviews, activeCitation, jumpToSource, previewSourceOnHover)}</Fragment>
-          }
-          return child
-        })
-      }
-      return children
-    }
-
-    return {
-      h1: ({ children }: any) => <h2 className="mb-2 mt-0.5 text-base font-bold tracking-tight text-foreground">{processChildren(children)}</h2>,
-      h2: ({ children }: any) => <h3 className="mb-2 mt-4 flex items-center gap-1.5 border-l-2 border-primary pl-2 text-sm font-bold text-foreground">{processChildren(children)}</h3>,
-      h3: ({ children }: any) => <h4 className="mb-1.5 mt-3 text-[13px] font-semibold text-foreground/95">{processChildren(children)}</h4>,
-      p: ({ children }: any) => <p className="my-2 text-[13px] leading-[1.7] text-foreground/90">{processChildren(children)}</p>,
-      ul: ({ children }: any) => <ul className="my-2.5 space-y-1.5 pl-4 text-[13px] leading-[1.65] [list-style-type:disc] marker:text-primary">{children}</ul>,
-      ol: ({ children }: any) => <ol className="my-2.5 space-y-2 pl-0 text-[13px] leading-[1.7] [list-style-type:decimal] marker:text-primary">{children}</ol>,
-      li: ({ children }: any) => <li className="text-foreground/90">{processChildren(children)}</li>,
-      strong: ({ children }: any) => <strong className="font-semibold text-foreground">{processChildren(children)}</strong>,
-      blockquote: ({ children }: any) => <blockquote className="my-1.5 ml-1.5 border-l-2 border-primary/40 pl-2 py-0.5 text-[12px] leading-[1.5] text-foreground/70">{processChildren(children)}</blockquote>,
-      code: ({ children }: any) => <code className="rounded bg-muted/60 px-1 py-0 font-mono text-[0.85em] text-primary font-medium">{children}</code>,
-      hr: () => <hr className="my-3 border-border/40" />,
-    }
-  }
-
-  const markdown = (content: string) => (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={createMarkdownComponents()}>
-      {content}
-    </ReactMarkdown>
-  )
 
   const current = allPreviewsWithSources[currentPreviewIndex]
   const hasImages = allPreviewsWithSources.length > 0
 
   const goToPrev = useCallback(() => {
     setCurrentPreviewIndex((currentIndex) => Math.max(0, currentIndex - 1))
-  }, [])
+  }, [setCurrentPreviewIndex])
   const goToNext = useCallback(() => {
     setCurrentPreviewIndex((currentIndex) => Math.min(allPreviewsWithSources.length - 1, currentIndex + 1))
-  }, [allPreviewsWithSources.length])
+  }, [allPreviewsWithSources.length, setCurrentPreviewIndex])
 
   const queueWheelPage = useCallback((deltaY: number) => {
     if (Math.abs(deltaY) < 15) return
@@ -230,22 +94,10 @@ function OverlayAnswer({
   }, [hasImages, queueWheelPage])
 
   return (
-    <div ref={answerContainerRef} className="flex h-full min-h-0 gap-3">
+    <div className="flex h-full min-h-0 gap-3">
       <div className="min-w-0 flex-1 overflow-y-auto pr-2">
-        <div className="space-y-0.5 pb-2">
-          {paragraphs.map((paragraph, paragraphIndex) => (
-            <div key={`${paragraphIndex}:${paragraph.slice(0, 20)}`} className="min-w-0">
-              {markdown(paragraph)}
-            </div>
-          ))}
-        </div>
+        <ManualAnswerMarkdown answer={response.answer} sourcePreviews={sourcePreviews} activeCitation={activeCitation} onCitationClick={jumpToSource} onCitationHover={previewSourceOnHover} variant="compact" />
 
-        {loading && (
-          <div className="mt-3 flex h-14 items-center justify-center rounded-lg border border-border/40 bg-black/20 text-xs text-muted-foreground">
-            <LoaderCircle className="mr-2 size-3.5 animate-spin" />
-            正在加载页面预览…
-          </div>
-        )}
       </div>
 
       {hasImages && (
@@ -271,6 +123,7 @@ function OverlayAnswer({
               <span className="text-[10px] text-muted-foreground tabular-nums">
                 {currentPreviewIndex + 1}/{allPreviewsWithSources.length}
               </span>
+              {loading && <span className="ml-1 flex items-center gap-1 text-[9px] text-muted-foreground"><LoaderCircle className="size-2.5 animate-spin" />补全引用页</span>}
             </div>
             <button type="button" onClick={() => setExpandedPreview(true)}
               className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors">
@@ -325,33 +178,9 @@ function OverlayAnswer({
           )}
         </aside>
       )}
+      {loading && !hasImages && <aside className="flex w-[350px] min-h-0 shrink-0 animate-pulse flex-col overflow-hidden rounded-xl border border-border/40 bg-background/35"><div className="h-9 border-b border-border/35 bg-muted/25" /><div className="m-2 flex min-h-56 flex-1 items-center justify-center rounded-lg bg-white/8 text-[11px] text-muted-foreground"><LoaderCircle className="mr-2 size-3.5 animate-spin" />正在生成页面预览…</div></aside>}
 
-      {expandedPreview && current && (
-        <div
-          className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
-          onClick={() => setExpandedPreview(false)}
-          onWheel={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            queueWheelPage(event.deltaY)
-          }}
-          title="滚动滚轮切换页面 · 点击图片关闭"
-        >
-          <div className="relative flex max-h-full max-w-full items-center justify-center">
-            <button type="button" onClick={() => setExpandedPreview(false)}
-              className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-lg bg-black/75 px-2.5 py-1.5 text-xs text-white/90 shadow-lg hover:bg-black/90 hover:text-white">
-              <X className="size-3.5" />关闭
-            </button>
-            <img
-              src={current.preview.imageDataUrl}
-              alt=""
-              onClick={() => setExpandedPreview(false)}
-              className="max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] cursor-zoom-out rounded object-contain"
-              title="点击图片关闭"
-            />
-          </div>
-        </div>
-      )}
+      {expandedPreview && current && <ManualImageLightbox preview={current.preview} onClose={() => setExpandedPreview(false)} onWheel={queueWheelPage} />}
     </div>
   )
 }
@@ -394,6 +223,8 @@ function OverlayOnlineAnswer({ response }: { response: ManualOnlineSearchAnswer 
 }
 
 export default function OverlayPage() {
+  const { language } = useI18n()
+  const answerLanguage = language === 'en-US' ? 'en' : 'zh'
   const bridge = window.electronAPI?.manualLibrary
   const overlay = window.electronAPI?.overlay
   const [overview, setOverview] = useState<ManualLibraryOverview | null>(null)
@@ -405,10 +236,24 @@ export default function OverlayPage() {
   const [askingOnline, setAskingOnline] = useState(false)
   const [pagePreviews, setPagePreviews] = useState<ManualPagePreview[]>([])
   const [previewsLoading, setPreviewsLoading] = useState(false)
+  const previewRequestRef = useRef(0)
   const [displayMode, setDisplayMode] = useState<OverlayDisplayMode>('desktop')
   const [runtimeSettings, setRuntimeSettings] = useState<OverlaySettings | null>(null)
+  const [speechState, setSpeechState] = useState<SpeechRecognitionState>({ state: 'idle' })
   const vrPointerRef = useRef<HTMLSpanElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const askRef = useRef<(voiceQuestion?: string) => Promise<void>>(async () => undefined)
+  const voiceSubmitTimerRef = useRef<number | null>(null)
+
+  const cancelVoiceSubmit = useCallback((resetState = true) => {
+    if (voiceSubmitTimerRef.current !== null) {
+      window.clearTimeout(voiceSubmitTimerRef.current)
+      voiceSubmitTimerRef.current = null
+    }
+    if (resetState) setSpeechState((current) => current.state === 'reviewing' ? { state: 'idle' } : current)
+  }, [])
+
+  useEffect(() => () => cancelVoiceSubmit(false), [cancelVoiceSubmit])
 
   useEffect(() => {
     if (!bridge) return
@@ -451,6 +296,16 @@ export default function OverlayPage() {
   }, [overlay])
 
   useEffect(() => {
+    if (!bridge) return
+    return bridge.onOverviewChanged((nextOverview) => {
+      setOverview(nextOverview)
+      setResponse(null)
+      setOnlineResponse(null)
+      setPagePreviews([])
+    })
+  }, [bridge])
+
+  useEffect(() => {
     if (!overlay) return
     void overlay.getDisplayMode().then((status) => setDisplayMode(status.mode)).catch(() => undefined)
     return overlay.onDisplayModeChanged((status) => setDisplayMode(status.mode))
@@ -458,28 +313,47 @@ export default function OverlayPage() {
 
   const loadPagePreviews = useCallback(async (answer: ManualQuestionAnswer) => {
     if (!bridge) return
-    const sources = answer.sources.filter((source) => source.page && source.sourcePath.toLocaleLowerCase().endsWith('.pdf'))
-    const unique = [...new Map(sources.map((source) => [`${source.documentId}:${source.page}`, source])).values()].slice(0, 5)
+    const requestId = ++previewRequestRef.current
+    const unique = manualPreviewSources(answer)
     setPagePreviews([])
     if (unique.length === 0) return
     setPreviewsLoading(true)
     try {
-      const previews = await Promise.all(unique.map((source) => bridge.pagePreview(source.documentId, source.page!)))
-      setPagePreviews(previews.filter((p): p is ManualPagePreview => Boolean(p)))
+      for (const source of unique) {
+        try {
+          const preview = await bridge.pagePreview(source.documentId, source.page!)
+          if (requestId !== previewRequestRef.current) return
+          if (preview) setPagePreviews((current) => [...current, preview])
+        } catch (reason) {
+          console.warn('[manual-library] overlay page preview failed', { documentId: source.documentId, page: source.page, reason })
+        }
+      }
     } finally {
-      setPreviewsLoading(false)
+      if (requestId === previewRequestRef.current) setPreviewsLoading(false)
     }
   }, [bridge])
 
-  const ask = async () => {
-    if (!bridge || !question.trim() || asking) return
-    const q = question.trim()
+  const ask = async (voiceQuestion?: string) => {
+    const q = (voiceQuestion ?? question).trim()
+    if (!bridge || !q || asking) return
     setAsking(true)
     setResponse(null)
     setOnlineResponse(null)
     setPagePreviews([])
     try {
-      const answer = await bridge.ask(q)
+      const cached = await bridge.preferredCachedAnswer(q, answerLanguage)
+      if (cached?.kind === 'online') {
+        setOnlineResponse(cached.answer)
+        void bridge.overview().then(setOverview).catch(() => undefined)
+        return
+      }
+      if (cached?.kind === 'local') {
+        setResponse(cached.answer)
+        void loadPagePreviews(cached.answer)
+        void bridge.overview().then(setOverview).catch(() => undefined)
+        return
+      }
+      const answer = await bridge.ask(q, answerLanguage)
       setResponse(answer)
       void loadPagePreviews(answer)
       void bridge.overview().then(setOverview).catch(() => undefined)
@@ -492,6 +366,25 @@ export default function OverlayPage() {
       else setTimeout(() => textareaRef.current?.focus(), 50)
     }
   }
+  useEffect(() => {
+    askRef.current = ask
+  })
+
+  useEffect(() => {
+    if (!overlay) return
+    const removeState = overlay.onSpeechState(setSpeechState)
+    const removeResult = overlay.onSpeechResult((text) => {
+      cancelVoiceSubmit(false)
+      setQuestion(text)
+      setSpeechState({ state: 'reviewing', message: '识别完成，1.6 秒后自动提问；可直接修改或按 Enter 立即发送' })
+      voiceSubmitTimerRef.current = window.setTimeout(() => {
+        voiceSubmitTimerRef.current = null
+        setSpeechState({ state: 'idle' })
+        void askRef.current(text)
+      }, VOICE_REVIEW_DELAY_MS)
+    })
+    return () => { removeState(); removeResult() }
+  }, [cancelVoiceSubmit, overlay])
 
   const askOnline = async () => {
     if (!bridge || !question.trim() || askingOnline) return
@@ -501,7 +394,7 @@ export default function OverlayPage() {
     setOnlineResponse(null)
     setPagePreviews([])
     try {
-      const answer = await bridge.askOnline(q)
+      const answer = await bridge.askOnline(q, answerLanguage)
       setOnlineResponse(answer)
       void bridge.overview().then(setOverview).catch(() => undefined)
     } catch {
@@ -514,9 +407,12 @@ export default function OverlayPage() {
     }
   }
 
-  const close = () => overlay?.hide()
+  const close = () => {
+    cancelVoiceSubmit()
+    overlay?.hide()
+  }
 
-  const configured = overview?.configured && overview.deepSeek.configured && overview.index.chunkCount > 0
+  const configured = overview?.configured && overview.ai.configured && overview.index.chunkCount > 0
 
   // Both modes fill their own host window. Electron gives desktop mode a compact
   // movable window and VR mode a 1200x750 capture surface.
@@ -524,6 +420,7 @@ export default function OverlayPage() {
   const panelMaxHeight = '100vh'
 
   const dragRef = useRef<{ lastX: number; lastY: number } | null>(null)
+  const resizeRef = useRef<{ startX: number; startY: number; width: number; height: number } | null>(null)
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
@@ -546,6 +443,32 @@ export default function OverlayPage() {
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }, [displayMode, overlay])
+
+  const onResizeStart = useCallback((event: React.MouseEvent) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    resizeRef.current = {
+      startX: event.screenX,
+      startY: event.screenY,
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }
+    const onMove = (moveEvent: MouseEvent) => {
+      const start = resizeRef.current
+      if (!start) return
+      const width = Math.min(2_000, Math.max(400, start.width + moveEvent.screenX - start.startX))
+      const height = Math.min(1_600, Math.max(300, start.height + moveEvent.screenY - start.startY))
+      void overlay?.setSize(width, height)
+    }
+    const onUp = () => {
+      resizeRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [overlay])
 
   return (
     <div
@@ -574,7 +497,7 @@ export default function OverlayPage() {
         className="pointer-events-none fixed z-[999] hidden size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-primary shadow-[0_0_10px_rgba(255,120,20,0.85)]"
       />}
       <div
-        className={`flex flex-col overflow-hidden border border-white/10 bg-black/80 backdrop-blur-xl shadow-2xl ${displayMode === 'desktop' ? 'rounded-2xl' : ''}`}
+        className={`relative flex flex-col overflow-hidden border border-white/10 bg-black/80 backdrop-blur-xl shadow-2xl ${displayMode === 'desktop' ? 'rounded-2xl' : ''}`}
         style={{
           width: panelWidth,
           height: panelMaxHeight,
@@ -648,6 +571,7 @@ export default function OverlayPage() {
 
       {configured && (
         <div className="shrink-0 border-t border-white/10 p-3">
+          {speechState.state !== 'idle' && <div className={cn('mb-2 rounded-lg border px-3 py-2 text-xs', speechState.state === 'error' ? 'border-red-400/30 bg-red-500/10 text-red-200' : speechState.state === 'reviewing' ? 'border-amber-400/30 bg-amber-500/10 text-amber-200' : 'border-primary/30 bg-primary/10 text-primary')}><span className={speechState.state === 'recording' ? 'animate-pulse' : ''}>{speechState.message || (speechState.state === 'recording' ? '正在录音' : speechState.state === 'reviewing' ? '等待发送' : '正在识别')}</span></div>}
           <div className="flex items-end gap-2">
             <textarea
               ref={textareaRef}
@@ -656,10 +580,14 @@ export default function OverlayPage() {
                 if (displayMode === 'vr') void overlay?.beginTextInput()
               }}
               value={question}
-              onChange={(e) => setQuestion(e.target.value)}
+              onChange={(e) => {
+                cancelVoiceSubmit()
+                setQuestion(e.target.value)
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault()
+                  cancelVoiceSubmit()
                   if (e.ctrlKey || e.metaKey) {
                     if (!askingOnline && question.trim()) void askOnline()
                   } else {
@@ -673,7 +601,10 @@ export default function OverlayPage() {
             />
             <button
               type="button"
-              onClick={() => void askOnline()}
+              onClick={() => {
+                cancelVoiceSubmit()
+                void askOnline()
+              }}
               disabled={askingOnline || !question.trim()}
               title="联网搜索 (Ctrl+Enter)"
               className={cn(
@@ -687,7 +618,10 @@ export default function OverlayPage() {
             </button>
             <button
               type="button"
-              onClick={() => void ask()}
+              onClick={() => {
+                cancelVoiceSubmit()
+                void ask()
+              }}
               disabled={asking || !question.trim()}
               title="本地问答 (Enter)"
               className={cn(
@@ -702,6 +636,16 @@ export default function OverlayPage() {
           </div>
         </div>
       )}
+      <button
+        type="button"
+        aria-label="调整内置手册窗口大小"
+        title={displayMode === 'vr' ? '拖动调整 VR 膝板大小' : '拖动调整桌面膝板大小'}
+        className="absolute bottom-1 right-1 z-50 flex size-6 cursor-nwse-resize items-center justify-center rounded text-white/30 transition-colors hover:bg-white/10 hover:text-white/70"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        onMouseDown={onResizeStart}
+      >
+        <Scaling className="size-3.5" />
+      </button>
       </div>
     </div>
   )

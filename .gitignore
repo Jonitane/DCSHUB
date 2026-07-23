@@ -17,6 +17,8 @@ build-out/
 build-out2/
 build-out3/
 build/native/
+core/**/bin/
+core/**/obj/
 docs/branding/
 *.tsbuildinfo
 *.local

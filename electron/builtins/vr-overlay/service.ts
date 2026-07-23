@@ -7,6 +7,8 @@ const REGISTRY_KEYS = [
   'HKLM\\SOFTWARE\\Khronos\\OpenXR\\1\\ApiLayers\\Implicit',
   'HKCU\\SOFTWARE\\Khronos\\OpenXR\\1\\ApiLayers\\Implicit',
 ] as const
+const DCSHUB_REGISTRY_KEY = 'HKCU\\SOFTWARE\\DCSHUB'
+const OPENXR_LOG_DIRECTORY_VALUE = 'OpenXrLogDirectory'
 const LAYER_NAME = 'XR_APILAYER_DCSHUB_manual_overlay'
 const PACKET_MAGIC = 0x4D415246
 const HEADER_SIZE = 48
@@ -43,7 +45,7 @@ export function createLayerManifest(layerPath: string): string {
       name: LAYER_NAME,
       library_path: path.resolve(layerPath).replace(/\\/g, '/'),
       api_version: '1.0',
-      implementation_version: '3',
+      implementation_version: '4',
       description: 'DCSHUB Super Manual OpenXR overlay',
       functions: { xrNegotiateLoaderApiLayerInterface: 'xrNegotiateLoaderApiLayerInterface' },
       disable_environment: 'DISABLE_DCSHUB_MANUAL_OVERLAY',
@@ -99,11 +101,16 @@ export class VrOverlayService {
     private readonly runCommand: CommandRunner = defaultCommandRunner,
     private readonly spawnBridge: typeof spawn = spawn,
     manifestDirectory: string = resourcesDirectory,
+    private readonly logDirectory?: string,
   ) {
     this.layerPath = path.join(resourcesDirectory, 'DcsHubOpenXrLayer.dll')
     this.bridgePath = path.join(resourcesDirectory, 'DcsHubVrBridge.exe')
     this.manifestPath = path.join(manifestDirectory, 'DCSHUBManualOverlayLayer.json')
     if (path.resolve(manifestDirectory) !== path.resolve(resourcesDirectory)) this.writeManifest()
+  }
+
+  cleanupStaleRegistration(): void {
+    try { this.setLayerRegistration(false) } catch { /* Best-effort cleanup for an interrupted previous run. */ }
   }
 
   status(): VrOverlayStatus {
@@ -121,6 +128,7 @@ export class VrOverlayService {
     if (mode === 'vr') {
       try {
         this.assertAvailable()
+        this.configureNativeLogDirectory()
         this.setLayerRegistration(true)
         this.ensureBridge()
       } catch (reason) {
@@ -253,15 +261,30 @@ export class VrOverlayService {
       }
     }
     let firstError: unknown = null
-    let registered = false
+    let cleaned = false
     for (const registryKey of REGISTRY_KEYS) {
       try {
-        setValue(registryKey, '1')
-        registered = true
+        this.runCommand('reg.exe', ['delete', registryKey, '/v', this.manifestPath, '/f'])
+        cleaned = true
       } catch (reason) {
         firstError ||= reason
+        try {
+          setValue(registryKey, '1')
+          cleaned = true
+        } catch { /* Continue so the per-user registration still has a chance to be disabled. */ }
       }
     }
-    if (!registered && firstError) throw firstError
+    if (!cleaned && firstError) throw firstError
+  }
+
+  private configureNativeLogDirectory(): void {
+    if (process.platform !== 'win32' || !this.logDirectory) return
+    this.runCommand('reg.exe', [
+      'add', DCSHUB_REGISTRY_KEY,
+      '/v', OPENXR_LOG_DIRECTORY_VALUE,
+      '/t', 'REG_SZ',
+      '/d', path.resolve(this.logDirectory),
+      '/f',
+    ])
   }
 }

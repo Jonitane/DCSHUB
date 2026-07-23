@@ -56,5 +56,17 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (/node_modules[\\/]react(?:-dom|-router-dom)?[\\/]/.test(id)) return 'react-vendor'
+          if (/node_modules[\\/](?:react-markdown|remark-gfm|unified|micromark|mdast|hast|unist)/.test(id)) return 'markdown-vendor'
+          if (id.includes('node_modules/framer-motion')) return 'motion-vendor'
+          if (id.includes('node_modules/lucide-react')) return 'icons-vendor'
+          return undefined
+        },
+      },
+    },
   },
 })

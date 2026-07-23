@@ -1,6 +1,6 @@
 {
   "name": "dcs-control-hub",
-  "version": "2.2.1",
+  "version": "2.5.1",
   "description": "面向 DCS World 玩家的驱动、工具、插件与本地模组统一管理中心",
   "main": "dist-electron/main.js",
   "author": "DCSHUB",
@@ -16,18 +16,23 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "npm run build:vr-overlay && tsc -b && vite build && electron-builder",
-    "build:debug-portable": "npm run build:vr-overlay && tsc -b && vite build && electron-builder --dir",
+    "ensure:electron": "install-electron",
+    "dev": "npm run ensure:electron && npm run build:core && vite",
+    "build": "npm run build:core && npm run build:vr-overlay && tsc -b && vite build && electron-builder",
+    "build:debug-portable": "npm run build:core && npm run build:vr-overlay && tsc -b && vite build && electron-builder --dir",
+    "build:core": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-core.ps1",
     "build:vr-overlay": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-vr-overlay.ps1",
     "build:web": "tsc -b && vite build",
-    "test": "npm run test:dcs-launch && npm run test:mod-manager && npm run test:software-catalog && npm run test:srs && npm run test:i18n && npm run test:update && npm run test:vr-overlay && npm run test:manual-library",
+    "test": "node scripts/run-tests.mjs",
+    "test:core-architecture": "esbuild tests/core-architecture.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/core-architecture.integration.cjs && node .tmp/core-architecture.integration.cjs",
+    "test:core-native": "npm run build:core && esbuild tests/native-core.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/native-core.integration.cjs && node .tmp/native-core.integration.cjs",
     "test:dcs-launch": "esbuild tests/dcs-launch.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/dcs-launch.integration.cjs && node .tmp/dcs-launch.integration.cjs",
     "test:mod-manager": "esbuild tests/mod-manager.integration.ts --bundle --platform=node --format=cjs --alias:electron=./tests/electron-stub.ts --outfile=.tmp/mod-manager.integration.cjs && node .tmp/mod-manager.integration.cjs",
     "test:software-catalog": "esbuild tests/software-catalog.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/software-catalog.integration.cjs && node .tmp/software-catalog.integration.cjs",
     "test:srs": "esbuild tests/srs.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/srs.integration.cjs && node .tmp/srs.integration.cjs",
     "test:i18n": "esbuild tests/i18n.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/i18n.integration.cjs && node .tmp/i18n.integration.cjs",
     "test:update": "esbuild tests/update.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/update.integration.cjs && node .tmp/update.integration.cjs",
+    "test:logging": "esbuild tests/logging.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/logging.integration.cjs && node .tmp/logging.integration.cjs",
     "test:vr-overlay": "npm run build:vr-overlay && esbuild tests/vr-overlay.integration.ts --bundle --platform=node --format=cjs --outfile=.tmp/vr-overlay.integration.cjs && node .tmp/vr-overlay.integration.cjs",
     "test:manual-library": "esbuild tests/manual-library.integration.ts --bundle --platform=node --format=cjs --external:@napi-rs/canvas --outfile=.tmp/manual-library.integration.cjs && node .tmp/manual-library.integration.cjs",
     "preview": "vite preview",
@@ -64,7 +69,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^33.0.0",
+    "electron": "43.2.0",
     "electron-builder": "^25.0.0",
     "eslint": "^9",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -97,6 +102,13 @@
           "DcsHubVrBridge.exe",
           "DCSHUBManualOverlayLayer.json",
           "THIRD_PARTY_NOTICES.md"
+        ]
+      },
+      {
+        "from": "build/native/core",
+        "to": "core",
+        "filter": [
+          "DcsHub.Core.Host.exe"
         ]
       }
     ],

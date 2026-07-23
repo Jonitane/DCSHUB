@@ -23,7 +23,7 @@ const navIconClass = (active: boolean, prominent = false) => `relative z-10 flex
 }`
 
 export default function AppSidebar() {
-  const { language, toggleLanguage } = useI18n()
+  const { language, toggleLanguage, t } = useI18n()
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const { modules, refresh } = useModuleContext()
@@ -38,11 +38,11 @@ export default function AppSidebar() {
       const added = overview?.items.find((item) => item.kind === 'custom' && item.enabled && !before.has(item.id))
       if (added) {
         await refresh()
-        toast.success(`${added.displayName} 已添加`)
+        toast.success(t('software.added', { name: added.displayName }))
         navigate(`/module/${added.id}`)
       }
     } catch (reason) {
-      toast.error('添加软件失败', { description: reason instanceof Error ? reason.message : String(reason) })
+      toast.error(t('software.addFailed'), { description: reason instanceof Error ? reason.message : String(reason) })
     } finally {
       setAddingSoftware(false)
     }
@@ -67,8 +67,9 @@ export default function AppSidebar() {
           <div className="app-no-drag flex shrink-0 flex-col items-end gap-1 group-data-[state=collapsed]:absolute group-data-[state=collapsed]:bottom-1 group-data-[state=collapsed]:right-0">
             <button
               type="button"
+              data-i18n-ignore="true"
               className="flex h-7 items-center gap-1 overflow-hidden rounded-md border border-sidebar-border/75 bg-sidebar-accent/55 px-1.5 text-[9px] font-semibold text-sidebar-foreground/75 shadow-sm transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary group-data-[state=collapsed]:size-5 group-data-[state=collapsed]:justify-center group-data-[state=collapsed]:p-0"
-              aria-label={language === 'zh-CN' ? '切换到英文' : 'Switch to Chinese'}
+              aria-label={language === 'zh-CN' ? t('language.switchToEnglish') : t('language.switchToChinese')}
               title={language === 'zh-CN' ? 'English' : '中文'}
               onClick={toggleLanguage}
             >
@@ -86,7 +87,7 @@ export default function AppSidebar() {
             <SidebarMenuItem className="mb-1.5 border-b border-sidebar-border/70 pb-1.5">
               <NavLink to="/" end className={navItemClass(pathname === '/', true)}>
                 <span className={navIconClass(pathname === '/', true)}><LayoutDashboard className="size-[19px]" /></span>
-                <span className="relative z-10 text-base font-semibold group-data-[state=collapsed]:hidden">仪表板</span>
+                <span className="relative z-10 text-base font-semibold group-data-[state=collapsed]:hidden">{t('nav.dashboard')}</span>
               </NavLink>
             </SidebarMenuItem>
             {modules.map((module) => {
@@ -109,7 +110,7 @@ export default function AppSidebar() {
             <SidebarMenuItem className="mt-1 border-t border-sidebar-border/60 pt-1.5">
               <button type="button" className={`${navItemClass(false)} w-full`} onClick={() => void addSoftware()} disabled={addingSoftware}>
                 <span className={navIconClass(false)}>{addingSoftware ? <LoaderCircle className="size-[15px] animate-spin" /> : <Plus className="size-[15px]" />}</span>
-                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">添加软件</span>
+                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">{t('nav.addSoftware')}</span>
               </button>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -122,25 +123,25 @@ export default function AppSidebar() {
             <SidebarMenuItem>
               <NavLink to="/manual-library" className={navItemClass(pathname.startsWith('/manual-library'))}>
                 <span className={navIconClass(pathname.startsWith('/manual-library'))}><BookOpenText className="size-[15px]" /></span>
-                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">超级手册</span>
+                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">{t('nav.superManual')}</span>
               </NavLink>
             </SidebarMenuItem>
             <SidebarMenuItem>
               <NavLink to="/mod-manager" className={navItemClass(pathname.startsWith('/mod-manager'))}>
                 <span className={navIconClass(pathname.startsWith('/mod-manager'))}><PackageOpen className="size-[15px]" /></span>
-                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">模组管理器</span>
+                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">{t('nav.modManager')}</span>
               </NavLink>
             </SidebarMenuItem>
             <SidebarMenuItem>
               <NavLink to="/settings" className={navItemClass(pathname.startsWith('/settings'))}>
                 <span className={navIconClass(pathname.startsWith('/settings'))}><Settings className="size-[15px]" /></span>
-                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">设置</span>
+                <span className="relative z-10 text-sm font-medium group-data-[state=collapsed]:hidden">{t('nav.settings')}</span>
               </NavLink>
             </SidebarMenuItem>
             <SidebarMenuItem className="mt-1 border-t border-red-400/15 pt-1.5">
-              <button type="button" aria-label="退出 DCSHUB" title="退出 DCSHUB" className="flex w-full items-center gap-1.5 rounded-lg border border-transparent px-1.5 py-1 text-red-400 transition-colors hover:border-red-400/25 hover:bg-red-500/10 disabled:opacity-60" onClick={exitApplication} disabled={exiting}>
+              <button type="button" aria-label={t('nav.exitApp')} title={t('nav.exitApp')} className="flex w-full items-center gap-1.5 rounded-lg border border-transparent px-1.5 py-1 text-red-400 transition-colors hover:border-red-400/25 hover:bg-red-500/10 disabled:opacity-60" onClick={exitApplication} disabled={exiting}>
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-red-400/20 bg-red-500/10">{exiting ? <LoaderCircle className="size-[15px] animate-spin" /> : <LogOut className="size-[15px]" />}</span>
-                <span className="text-sm font-semibold group-data-[state=collapsed]:hidden">退出</span>
+                <span className="text-sm font-semibold group-data-[state=collapsed]:hidden">{t('nav.exit')}</span>
               </button>
             </SidebarMenuItem>
           </SidebarMenu>
